@@ -1100,11 +1100,19 @@ vk::ImageView P0GameBridge::ProcessFrame(const Instance& instance, Scheduler& sc
                 vk::PipelineStageFlagBits2::eBottomOfPipe, {});
         input_tick = scheduler.CurrentTick();
         last_submitted_tick = outstanding_tick = input_tick;
+        std::shared_ptr<P3Clock::Record> input_clock;
+        try { input_clock=std::make_shared<P3Clock::Record>(scheduler.P3ClockContext(),
+            P3Clock::OpaqueKey(static_cast<VkSemaphore>(scheduler.GetWorkSemaphore()->Handle())),input_tick); }
+        catch(...) {} // optional telemetry allocation cannot change input correctness/fallback
+        SubmitInfo input_submit{};input_submit.p3_input_clock=input_clock;
         const auto input_flush_start = std::chrono::steady_clock::now();
-        scheduler.Flush();
+        scheduler.Flush(input_submit); // same ONE Flush; only optional shared data attached
         input_flush_ms = ms_since(input_flush_start);
         const auto input_wait_start = std::chrono::steady_clock::now();
-        if (!WaitSubmitted(instance, scheduler, input_tick, hook_deadline)) throw AcceptanceExpired("P0 input GPU deadline native acceptance deadline");
+        if(input_clock)input_clock->WaitEntered();
+        const bool input_complete=WaitSubmitted(instance, scheduler, input_tick, hook_deadline);
+        if(input_clock)input_clock->WaitObserved(input_complete); // only existing proof, no extra IsFree
+        if (!input_complete) throw AcceptanceExpired("P0 input GPU deadline native acceptance deadline");
         last_completed_tick = input_tick; outstanding_tick = 0;
         input_wait_ms = ms_since(input_wait_start);
         const auto input_stats = diagnostic ? ReadValidation() : C4FrameValidationStats{};
@@ -1549,6 +1557,28 @@ vk::ImageView P0GameBridge::ProcessFrame(const Instance& instance, Scheduler& sc
         frame_record["output_timestamp_availability"] = output_gpu_ms ? "AVAILABLE" : "NOT_AVAILABLE";
         frame_record["query_readback_bytes"] = timing_pool ? (skip ? 32 : 64) : 0;
         frame_record["GPU_timing_scope"] = "same game queue conversion commands and dependencies; durations not cross-device clocks; no WAIT_BIT";
+        // Local telemetry snapshot only. API return can still be pending after actual
+        // target observation; do not wait, retry or gate correctness on this record.
+        if(input_clock)try {
+            const auto c=input_clock->Read();const auto bounds=P3Clock::WaitBounds(c);
+            Json clock{{"status",bounds?"MEASURED_BOUNDS":"NOT_MEASURED_PENDING_OR_INVALID"},
+                {"coherent",c.coherent},{"exact_context_timeline_tick",c.exact},
+                {"native_scheduler_context",input_clock->context},{"native_timeline_key",input_clock->timeline},
+                {"target_input_tick",input_clock->tick},{"actual_context",c.actual_context},
+                {"actual_timeline",c.actual_timeline},{"actual_signal_tick",c.actual_tick},
+                {"clock_scope","same_native_steady_clock_no_Wine_QPC"},
+                {"submit_return_scope","CPU_driver_return_upper_bound_not_enqueue_instant"},
+                {"completion_scope","existing_WaitSubmitted_verified_tick_host_observation_not_GPU_signal_instant"}};
+            clock["submit_enter_cpu_monotonic_ns"]=(c.flags&P3Clock::Enter)?Json(c.enter):Json(nullptr);
+            clock["submit_return_cpu_monotonic_ns"]=(c.flags&P3Clock::Returned)?Json(c.returned):Json(nullptr);
+            clock["submit_api_result"]=(c.flags&P3Clock::Returned)?Json(c.api_result):Json(nullptr);
+            clock["local_wait_enter_cpu_monotonic_ns"]=(c.flags&P3Clock::Wait)?Json(c.wait):Json(nullptr);
+            clock["target_complete_observed_cpu_monotonic_ns"]=(c.flags&P3Clock::Verified)?Json(c.observed):Json(nullptr);
+            if(bounds)clock["wait_bounds_ns"]={{"before_actual_submit_call",bounds->pre_call_wait_ns},
+                {"inside_driver_call_unknown_enqueue",bounds->driver_call_overlap_ns},
+                {"after_driver_return_queue_work_and_observation",bounds->post_return_wait_ns}};
+            frame_record["p3_input_submit_clock"]=std::move(clock);
+        } catch(...) {} // omit unavailable telemetry; never turn it into an ownership gate
         AtomicWrite(leaf + "/native-frame-" + suffix, frame_record.dump());
         std::printf("P0_FRAME_%s mode=%s session=%s execution_mode=%s frame=%u source_game_frame=%llu prev_source_game_frame=%llu nr_reset=%u reset_reason=%s audit_kind=%s guard_flag=%u guard_readback_bytes=%u input_tick=%llu output_tick=%llu elapsed_ms=%lld SR_fallback=%u pixel_scope=%s\n",
             skip ? "INVALID_REJECTED" : "ACCEPTED", mode.c_str(), session.c_str(), execution_mode.c_str(), frame,

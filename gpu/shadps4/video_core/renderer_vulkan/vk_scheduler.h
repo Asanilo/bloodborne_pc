@@ -28,6 +28,7 @@
 #include "video_core/renderer_vulkan/vk_breadcrumbs.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
+#include "video_core/renderer_vulkan/p3_submit_clock.h"
 
 namespace tracy {
 class VkCtxScope;
@@ -78,6 +79,9 @@ struct SubmitInfo {
     /// bbport: queue operations that go out right before the submission, in queue order (sparse
     /// binds): with BB_ASYNC_SUBMIT the submission itself goes out later, on a recording thread.
     std::vector<std::function<void()>> before_submit;
+    // Optional native-only timing data; carries exact expected context/timeline/tick.
+    // Default null for all other submissions; async info move preserves its lifetime.
+    std::shared_ptr<P3Clock::Record> p3_input_clock;
 
     void AddWait(vk::Semaphore semaphore, u64 tick = 1) {
         wait_semas[num_wait_semas] = semaphore;
@@ -985,6 +989,8 @@ public:
         return work_semaphore.IsFree(tick);
     }
 
+    [[nodiscard]] uint64_t P3ClockContext() const noexcept { return p3_clock_context; }
+
     /// Returns the scheduler timeline semaphore.
     [[nodiscard]] Semaphore* GetWorkSemaphore() noexcept {
         return &work_semaphore;
@@ -1166,6 +1172,7 @@ private:
     const Instance& instance;
     u32 crumb_stream = 0; ///< bbport: GPU breadcrumbs (vk_breadcrumbs.h)
     Semaphore work_semaphore;
+    const uint64_t p3_clock_context=P3Clock::NewContext(); // unique per Scheduler lifetime in this native process
     CommandPool command_pool;
     DynamicState dynamic_state;
     SubmitFunc on_submit{};

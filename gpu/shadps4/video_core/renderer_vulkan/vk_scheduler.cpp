@@ -1384,7 +1384,10 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     }
     ImGui::Core::TextureManager::Submit();
     q0_owner.Stage(7);
+    if(info.p3_input_clock)info.p3_input_clock->SubmitEnter(p3_clock_context,
+        P3Clock::OpaqueKey(static_cast<VkSemaphore>(work_semaphore.Handle())),signal_value);
     auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    if(info.p3_input_clock)info.p3_input_clock->SubmitReturned(static_cast<int32_t>(submit_result));
     if (submit_result == vk::Result::eErrorDeviceLost) {
         Breadcrumbs::ReportDeviceLost("submit");
     }
@@ -1475,7 +1478,10 @@ void Scheduler::SubmitAsync(SubmitInfo& info) {
             }
             q0_owner.Stage(7);
             PublishQ0Phase(diagnostic.get(), 3, 7);
+            if(info.p3_input_clock)info.p3_input_clock->SubmitEnter(p3_clock_context,
+                P3Clock::OpaqueKey(static_cast<VkSemaphore>(work_semaphore.Handle())),signal_value);
             const auto result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+            if(info.p3_input_clock)info.p3_input_clock->SubmitReturned(static_cast<int32_t>(result));
             if (result == vk::Result::eErrorDeviceLost) {
                 Breadcrumbs::ReportDeviceLost("submit");
             }
