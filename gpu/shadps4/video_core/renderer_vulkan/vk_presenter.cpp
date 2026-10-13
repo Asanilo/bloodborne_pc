@@ -394,8 +394,8 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         // display override. Bind this one-shot ledger to that real address and buffer.
         const bool pre_sr_automatic_readback = c1_audit.stage != "PRE_SR" || BbPreSr::AutomaticPresentReadback();
         if (c1_selected && c1_audit.stage == "PRE_SR")
-            std::printf("NATIVE_PRE_SR_PRESENT_READBACK_POLICY session=%s source_game_frame=%llu job=%u automatic_present_readback=%u automatic_full_pixel_readback_bytes=%llu scope=PRE_SR_automatic_Frame_dump_only explicit_dump_trigger=UNCHANGED actual_Frame_ledger=UNCHANGED guard_timestamps=UNCHANGED\n",
-                c1_audit.session.c_str(),(unsigned long long)c1_audit.source_game_frame,c1_audit.nr_frame,
+            std::printf("NATIVE_PRE_SR_PRESENT_READBACK_POLICY session=%s source_game_frame=%llu job=%s automatic_present_readback=%u automatic_full_pixel_readback_bytes=%llu scope=PRE_SR_automatic_Frame_dump_only explicit_dump_trigger=UNCHANGED actual_Frame_ledger=UNCHANGED guard_timestamps=UNCHANGED\n",
+                c1_audit.session.c_str(),(unsigned long long)c1_audit.source_game_frame,c1_audit.pre_sr_job_valid?std::to_string(c1_audit.nr_frame).c_str():"NOT_MEASURED",
                 pre_sr_automatic_readback,(unsigned long long)(pre_sr_automatic_readback?uint64_t(image_size.width)*image_size.height*4:0));
         if (c1_selected && pre_sr_automatic_readback && ((c1_audit.stage != "C3" && c1_audit.stage != "C4" && c1_audit.stage != "P0" && c1_audit.stage != "NATIVE_ASYNC") || c1_audit.audit_full)) {
             runtime.Transit(&image, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eTransfer,
@@ -427,6 +427,11 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     frame->audit_mode = frame_audit.mode;
     frame->audit_session = frame_audit.session;
     frame->audit_selected_output = frame_audit.selected_output;
+    frame->pre_sr_selection_known = frame_audit.pre_sr_selection_known;
+    frame->pre_sr_supported_SR = frame_audit.pre_sr_supported_SR;
+    frame->pre_sr_job_valid = frame_audit.pre_sr_job_valid;
+    frame->pre_sr_epoch = frame_audit.pre_sr_epoch;frame->pre_sr_history = frame_audit.pre_sr_history;
+    frame->pre_sr_fallback_reason = frame_audit.pre_sr_fallback_reason;
     frame->p0_selection_known = true;
     frame->audit_nr_frame = frame_audit.nr_frame;
     frame->audit_full = frame_audit.audit_full;
@@ -535,7 +540,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                     static_cast<unsigned long long>(frame->c1_present_frame_number),
                     static_cast<unsigned long long>(frame->c1_guest_prepare_tick),
                     static_cast<unsigned long long>(frame->ready_tick));
-    } else if (frame->c1_source_game_frame != 0) {
+    } else if (frame->c1_source_game_frame != 0 && (frame->audit_stage!="PRE_SR"||frame->pre_sr_job_valid)) {
         std::printf("C1_PRESENT_PREPARED route=nonupscaled_videoout source_game_frame=%llu merge_tick=%llu "
                     "guest_buffer_address=0x%llx gpu_frame_at_prepare=%llu "
                     "frame_counter_before=%llu present_frame_number=%llu "
@@ -851,12 +856,29 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         if (is_game_frame && !is_reusing_frame && std::getenv("BB_NR_C4_BASELINE"))
             std::printf("C4_SR_PRESENT mode=srOnly actual_game_frame=1 reused=0 cpu_monotonic_ns=%lld present_frame_number=%llu swapchain_present=%u helper_started=0 IPC=0\n",
                 (long long)c4_now_ns, (unsigned long long)BbStats::frame_number.load(), presented);
-        if(is_game_frame&&!is_reusing_frame&&frame->audit_stage=="PRE_SR"&&frame->c1_source_game_frame)
+        if(is_game_frame&&!is_reusing_frame&&frame->audit_stage=="PRE_SR"&&frame->c1_source_game_frame&&frame->pre_sr_job_valid)
             std::printf("NATIVE_PRE_SR_CURRENT_PRESENT session=%s source_game_frame=%llu job=%u selected_NR720=%u present_frame_number=%llu merge_tick=%llu prepare_tick=%llu ready_tick=%llu swapchain_present=%u cpu_monotonic_ns=%lld route=original720_NR720_nativeSR1080 phase=UNVERIFIED\n",
                 frame->audit_session.c_str(),(unsigned long long)frame->c1_source_game_frame,frame->audit_nr_frame,
                 frame->audit_selected_output,(unsigned long long)frame->c1_present_frame_number,
                 (unsigned long long)frame->c1_merge_tick,(unsigned long long)frame->c1_guest_prepare_tick,
                 (unsigned long long)frame->ready_tick,presented,(long long)c4_now_ns);
+        if(is_game_frame&&!is_reusing_frame&&BbPreSr::Enabled()){
+            if(pre_sr_passive_present_count<BbPreSr::Hot120::MaxPassivePresents){
+                ++pre_sr_passive_present_count;
+                const bool known=frame->audit_stage=="PRE_SR"&&frame->pre_sr_selection_known&&frame->c1_source_game_frame!=0;
+                const bool job_valid=frame->audit_stage=="PRE_SR"&&frame->pre_sr_job_valid;
+                const char* session=std::getenv("BB_NR_NATIVE_PRE_SR_SESSION");
+                std::printf("NATIVE_PRE_SR_FRAME_PRESENT session=%s source_game_frame=%s present_frame_number=%llu cpu_monotonic_ns=%lld swapchain_present=%u selection_known=%u supported_SR=%s selected_NR720=%s job_valid=%u job=%s fallback_reason=%s native_epoch=%s native_history=%s scope=actual_nonreuse_Frame_CPU_present_return_not_photon\n",
+                    session?session:"NOT_MEASURED",known?std::to_string(frame->c1_source_game_frame).c_str():"NOT_MEASURED",
+                    (unsigned long long)frame->c1_present_frame_number,(long long)c4_now_ns,presented,known,
+                    known?(frame->pre_sr_supported_SR?"1":"0"):"NOT_MEASURED",known?(frame->audit_selected_output?"1":"0"):"NOT_MEASURED",
+                    job_valid,job_valid?std::to_string(frame->audit_nr_frame).c_str():"NOT_MEASURED",
+                    frame->pre_sr_fallback_reason.c_str(),job_valid?std::to_string(frame->pre_sr_epoch).c_str():"NOT_MEASURED",
+                    job_valid?std::to_string(frame->pre_sr_history).c_str():"NOT_MEASURED");
+            }else if(pre_sr_passive_present_count==BbPreSr::Hot120::MaxPassivePresents){
+                ++pre_sr_passive_present_count;std::fprintf(stderr,"NATIVE_PRE_SR_FRAME_PRESENT_LIMIT max=30000 coverage=NOT_ALL_OBSERVED\n");
+            }
+        }
         if(is_game_frame&&!is_reusing_frame&&frame->audit_stage=="NATIVE_ASYNC"&&frame->c1_source_game_frame)
             std::printf("NATIVE_ASYNC_CURRENT_PRESENT session=%s snapshot_scope=%s source_game_frame=%llu present_frame_number=%llu merge_tick=%llu prepare_tick=%llu ready_tick=%llu swapchain_present=%u cpu_monotonic_ns=%lld current_SR=1 cache_selected=%u effect_applied=%u sparse_job=%u source_edited=0 current_NR_inference_claim=0\n",
                 frame->audit_session.c_str(),frame->audit_mode.c_str(),(unsigned long long)frame->c1_source_game_frame,
@@ -918,7 +940,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                         static_cast<unsigned long long>(frame->c1_present_frame_number),
                         static_cast<unsigned long long>(frame->ready_tick),
                         static_cast<unsigned long long>(present_submit_tick), is_game_frame, presented);
-        } else if (frame->c1_source_game_frame != 0 && is_game_frame && frame->audit_stage != "NATIVE_ASYNC") {
+        } else if (frame->c1_source_game_frame != 0 && is_game_frame && frame->audit_stage != "NATIVE_ASYNC" && (frame->audit_stage!="PRE_SR"||frame->pre_sr_job_valid)) {
             std::printf("C1_PRESENT_SUBMITTED route=nonupscaled_videoout source_game_frame=%llu merge_tick=%llu "
                         "guest_buffer_address=0x%llx guest_prepare_gpu_frame=%llu "
                         "guest_prepare_tick=%llu present_frame_number=%llu "

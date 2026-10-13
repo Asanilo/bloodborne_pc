@@ -4,7 +4,7 @@
 #include "video_core/renderer_vulkan/p0_wait_budget.h"
 #include <cstdio>
 #include <cstdlib>
-int main(){unsigned cases=0;auto check=[&](bool x){++cases;if(!x)std::abort();};
+int main(){setenv("BB_NR_NATIVE_PRE_SR_MAX_JOBS","120",1);setenv("BB_NR_NATIVE_PRE_SR_SCENE_FIRST","1",1);setenv("BB_NR_NATIVE_PRE_SR_PRESENT_READBACK","0",1);setenv("BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE","0",1);unsigned cases=0;auto check=[&](bool x){++cases;if(!x)std::abort();};
  BbPreSr::SourceIdentity a{100,3,2},b=a;
  check(BbPreSr::CanGrant(a,b,true,true,true,true));
  b.source=99;check(!BbPreSr::CanGrant(a,b,true,true,true,true));b=a;b.source=101;check(!BbPreSr::CanGrant(a,b,true,true,true,true));
@@ -52,7 +52,7 @@ int main(){unsigned cases=0;auto check=[&](bool x){++cases;if(!x)std::abort();};
  reject_diag([](auto&t){t.selected=false;});reject_diag([](auto&t){t.sr_success=false;});
  reject_diag([](auto&t){t.actual_image_match=false;});check(BbPreSr::DiagnosticImageBytes==7372800);
  setenv("BB_NR_NATIVE_PRE_SR","1",1);setenv("BB_NR_NATIVE_ORIGIN_MODE","resident",1);
- setenv("BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE","1",1);check(BbPreSr::DiagnosticEnabled());
+ setenv("BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE","1",1);check(!BbPreSr::DiagnosticEnabled());
  setenv("BB_NR_NATIVE_ORIGIN_MODE","skipEvaluate",1);check(!BbPreSr::DiagnosticEnabled());
  setenv("BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE","0",1);check(!BbPreSr::DiagnosticEnabled());
  unsetenv("BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE");unsetenv("BB_NR_NATIVE_ORIGIN_MODE");unsetenv("BB_NR_NATIVE_PRE_SR");
@@ -65,7 +65,7 @@ int main(){unsigned cases=0;auto check=[&](bool x){++cases;if(!x)std::abort();};
  for(const auto flag:{"","2","00","true"})check(!BbPreSr::ValidPresentReadbackConfiguration(flag,"resident",false));
  setenv("BB_NR_NATIVE_PRE_SR","1",1);setenv("BB_NR_NATIVE_ORIGIN_MODE","resident",1);
  unsetenv("BB_NR_NATIVE_PRE_SR_PRESENT_READBACK");check(BbPreSr::AutomaticPresentReadback());
- setenv("BB_NR_NATIVE_PRE_SR_PRESENT_READBACK","0",1);check(!BbPreSr::AutomaticPresentReadback());
+ setenv("BB_NR_NATIVE_PRE_SR_PRESENT_READBACK","0",1);setenv("BB_NR_NATIVE_PRE_SR_SCENE_FIRST","1",1);setenv("BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE","0",1);check(!BbPreSr::AutomaticPresentReadback());
  setenv("BB_NR_NATIVE_ORIGIN_MODE","skipEvaluate",1);check(!BbPreSr::AutomaticPresentReadback());
  setenv("BB_NR_NATIVE_ORIGIN_MODE","resident",1);setenv("BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE","1",1);check(BbPreSr::AutomaticPresentReadback());
  setenv("BB_NR_NATIVE_PRE_SR_PRESENT_READBACK","1",1);check(BbPreSr::AutomaticPresentReadback());

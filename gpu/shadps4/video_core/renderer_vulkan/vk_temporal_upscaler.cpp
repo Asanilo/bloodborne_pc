@@ -2007,16 +2007,23 @@ void TemporalUpscaler::Run() {
         if (c4_frame_processed) c4_game_bridge.EndMergeTiming(scheduler);
         if (q1_frame_processed) q1_game_bridge.EndMergeTiming(scheduler);
         if (p0_frame_processed) p0_controller.EndMergeTiming(scheduler);
-        if(native_pre_sr.Enabled()&&native_pre_sr.CurrentAttempt(source_game_frame)){
+        if(native_pre_sr.Enabled()){
             native_pre_sr.MergeRecorded(scheduler,source_game_frame);
+            const auto observation=native_pre_sr.Observation(source_game_frame);
             std::scoped_lock lock{c1_audit_mutex};
-            if(native_pre_sr_pending_audit)throw std::runtime_error("preSR cannot overwrite pending current-source ledger");
-            native_pre_sr_pending_audit=C1PresentAudit{.stage="PRE_SR",.mode=native_pre_sr.CurrentSelected(source_game_frame)?"NR-before-SR":"original-SR-fallback",
-                .session=native_pre_sr.Session(),.execution_mode="hot",.selected_output=native_pre_sr.CurrentSelected(source_game_frame),
-                .audit_full=false,.nr_frame=unsigned(native_pre_sr.CurrentJob()),.source_game_frame=source_game_frame,.merge_tick=scheduler.CurrentTick()};
-            std::printf("NATIVE_PRE_SR_MERGE_RECORDED session=%s source_game_frame=%llu job=%llu selected_NR720=%u merge_tick=%llu SR_display=1920x1080 original_scene_alpha_preserved=1\n",
-                native_pre_sr.Session().c_str(),(unsigned long long)source_game_frame,
-                (unsigned long long)native_pre_sr.CurrentJob(),native_pre_sr.CurrentSelected(source_game_frame),(unsigned long long)scheduler.CurrentTick());
+            if(native_pre_sr_pending_audit){
+                if(native_pre_sr_pending_audit->pre_sr_job_valid)throw std::runtime_error("preSR cannot overwrite pending current-job ledger");
+                std::printf("NATIVE_PRE_SR_PASSIVE_UNBOUND source_game_frame=%llu association=NOT_MEASURED reason=NEXT_MERGE_BEFORE_PREPARE\n",(unsigned long long)native_pre_sr_pending_audit->source_game_frame);
+            }
+            native_pre_sr_pending_audit=C1PresentAudit{.stage="PRE_SR",.mode=observation.selected?"NR-before-SR":"original-SR-fallback",
+                .session=native_pre_sr.Session(),.execution_mode="hot",.selected_output=observation.selected,
+                .audit_full=false,.nr_frame=unsigned(observation.job),.source_game_frame=observation.source,.merge_tick=scheduler.CurrentTick(),
+                .pre_sr_selection_known=observation.known,.pre_sr_supported_SR=observation.supported,.pre_sr_job_valid=observation.job_valid,
+                .pre_sr_epoch=observation.epoch,.pre_sr_history=observation.history,.pre_sr_fallback_reason=observation.reason};
+            if(observation.job_valid)std::printf("NATIVE_PRE_SR_MERGE_RECORDED session=%s source_game_frame=%llu job=%s selected_NR720=%u merge_tick=%llu SR_display=1920x1080 original_scene_alpha_preserved=1 selection_known=%u\n",
+                native_pre_sr.Session().c_str(),(unsigned long long)observation.source,
+                observation.job_valid?std::to_string(observation.job).c_str():"NOT_MEASURED",observation.selected,
+                (unsigned long long)scheduler.CurrentTick(),observation.known);
         }
         if(native_async_current) {
             if(native_sky_selected) native_async_snapshot.MergeRecorded(scheduler,source_game_frame);
@@ -2981,13 +2988,17 @@ bool TemporalUpscaler::TakeC1PresentAudit(VAddr address, u64 present_frame_count
     std::scoped_lock lock{c1_audit_mutex};
     if(native_pre_sr_pending_audit){
         const auto& pending=*native_pre_sr_pending_audit;
-        if(gpu_frame_at_prepare!=pending.source_game_frame+1||prepare_tick<pending.merge_tick){
+        if(!pending.pre_sr_selection_known||!BbPreSr::Hot120::CanAssociate(pending.source_game_frame,gpu_frame_at_prepare,pending.merge_tick,prepare_tick)){
+            if(!pending.pre_sr_job_valid){
+                audit=pending;audit.source_game_frame=0;audit.pre_sr_selection_known=false;audit.pre_sr_supported_SR=false;
+                audit.pre_sr_fallback_reason="ASSOCIATION_NOT_MEASURED";native_pre_sr_pending_audit.reset();return false;
+            }
             std::fprintf(stderr,"NATIVE_PRE_SR_PRESENT_ASSOCIATION_REJECTED source=%llu actual_prepare_frame=%llu counted_valid=0\n",
                 (unsigned long long)pending.source_game_frame,(unsigned long long)gpu_frame_at_prepare);
             native_pre_sr.RejectAssociation();native_pre_sr_pending_audit.reset();audit={};return false;
         }
         audit=pending;audit.buffer_address=address;audit.buffer_prepare_gpu_frame=gpu_frame_at_prepare;audit.buffer_prepare_tick=prepare_tick;audit.present_frame_counter_before=present_frame_counter_before;
-        std::printf("NATIVE_PRE_SR_PRESENT_BIND session=%s source_game_frame=%llu job=%u merge_tick=%llu gpu_frame_at_prepare=%llu guest_buffer_address=0x%llx prepare_tick=%llu association=next_nonupscaled_videoout_prepare_after_merge\n",
+        if(audit.pre_sr_job_valid)std::printf("NATIVE_PRE_SR_PRESENT_BIND session=%s source_game_frame=%llu job=%u merge_tick=%llu gpu_frame_at_prepare=%llu guest_buffer_address=0x%llx prepare_tick=%llu association=next_nonupscaled_videoout_prepare_after_merge\n",
             audit.session.c_str(),(unsigned long long)audit.source_game_frame,audit.nr_frame,(unsigned long long)audit.merge_tick,
             (unsigned long long)gpu_frame_at_prepare,(unsigned long long)address,(unsigned long long)prepare_tick);
         native_pre_sr_pending_audit.reset();return true;
@@ -3308,8 +3319,10 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
             const auto cc=scene_targets.CaptureCreateInfo(color.image);
             const auto dc=scene_targets.CaptureCreateInfo(depth.image);
             bool pending=false;{std::scoped_lock lock{c1_audit_mutex};pending=native_pre_sr_pending_audit.has_value();}
-            const bool profile=hdr&&!Scaled()&&w==1280&&h==720&&ow==1920&&oh==1080&&
-                BbSettings::Get().preset==1&&BbSettings::Get().jitter&&cc&&dc&&!pending;
+            const bool supported=hdr&&!Scaled()&&w==1280&&h==720&&ow==1920&&oh==1080&&
+                BbSettings::Get().preset==1&&BbSettings::Get().jitter;
+            native_pre_sr.BeginSource(pre_source,supported,pending);
+            const bool profile=supported&&cc&&dc&&!pending;
             vk::ImageView edited{};
             if(profile)edited=native_pre_sr.TryCurrent(instance,scheduler,
                 {color.image,depth.image,vk::Image(motion_image)},{*cc,*dc,motion_image.image_ci},

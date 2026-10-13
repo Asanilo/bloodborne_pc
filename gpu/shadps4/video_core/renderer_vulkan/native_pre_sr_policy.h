@@ -6,9 +6,10 @@
 #include <initializer_list>
 #include <array>
 #include <string_view>
+#include "native_pre_sr_hot120_policy.h"
 namespace BbPreSr {
 inline bool Enabled()noexcept {
- const char*p=std::getenv("BB_NR_NATIVE_PRE_SR");if(!p||std::strcmp(p,"1"))return false;
+ const char*p=std::getenv("BB_NR_NATIVE_PRE_SR");if(!p||std::strcmp(p,"1")||!Hot120::Environment())return false;
  for(const char*k:{"BB_NR_NATIVE_ASYNC","BB_NR_P0_MODE","BB_NR_Q1_MODE","BB_NR_C4_MODE","BB_NR_C3_MODE","BB_NR_C2_MODE","BB_NR_C1_MODE"}){
   const char*v=std::getenv(k);if(v&&v[0]&&std::strcmp(v,"0"))return false;
  }

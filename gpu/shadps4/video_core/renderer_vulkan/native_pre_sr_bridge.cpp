@@ -122,32 +122,71 @@ void NativePreSrBridge::Poll(const Instance&i,Scheduler&s,bool supported){
   }
  }
 }
+void NativePreSrBridge::BeginSource(uint64_t source,bool supported,bool prior_audit_pending){
+ current_source=source;selected=false;attempted=false;
+ observation={.source=source,.supported=supported,.reason=prior_audit_pending?"PRIOR_AUDIT_UNBOUND":supported?"RAW_NO_JOB":"UNSUPPORTED_SOURCE"};
+}
+BbPreSr::Hot120::Observation NativePreSrBridge::Observation(uint64_t source)const noexcept {
+ return observation.source==source?observation:BbPreSr::Hot120::Observation{};
+}
+void NativePreSrBridge::ObserveActualPreviousGpu(Scheduler&s){
+ if(!slot||!slot->last_use||slot->Done()||!s.IsFree(slot->last_use))return;
+ const auto observed=s.GetWorkSemaphore()->KnownGpuTick();
+ auto old=slot->observed.load();while(old<observed&&!slot->observed.compare_exchange_weak(old,observed)){}
+ auto q=peer->Quiescence();old=q->observed_tick.load();while(old<observed&&!q->observed_tick.compare_exchange_weak(old,observed)){}
+ // Refresh/counter evidence is actual completion of this timeline, not callback age.
+}
+bool NativePreSrBridge::ReadyForNext(const Instance&,Scheduler&s,Clock::time_point deadline){
+ for(;;){
+  ObserveActualPreviousGpu(s);
+  if(peer->State()==NativePreSrOwner::Phase::Failed){observation.reason="PEER_FAILED";return false;}
+  if(pending&&peer->State()==NativePreSrOwner::Phase::Finalized&&pending->consumed_published.load(std::memory_order_acquire)){
+   peer->FinalizedAck(pending);pending.reset();
+  }
+  const bool gpu_done=!slot||slot->Done();
+  if(BbPreSr::Hot120::SafeReuse(gpu_done,!pending,peer->State()==NativePreSrOwner::Phase::Ready))return true;
+  if(peer->FinalizedCount()>=BbPreSr::Hot120::MaxJobs){observation.reason="CAP_RETIRED";return false;}
+  if(slot&&!gpu_done&&!BbPreSr::Hot120::CanPollPrior(slot->last_use,s.CurrentTick())){
+   observation.reason="PRIOR_NATIVE_TICK_OPEN_NO_WAIT";return false;
+  }
+  if(Clock::now()>=deadline){observation.reason=gpu_done?"PRIOR_CONSUMED_NOT_READY":"PRIOR_GPU_NOT_READY";return false;}
+  // No public submitted proof exists: do NOT block waitSemaphores on this prior
+  // target or infer queued from CurrentTick. Poll actual counter/state bounded.
+  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+ }
+}
 vk::ImageView NativePreSrBridge::TryCurrent(const Instance&i,Scheduler&s,const std::array<vk::Image,3>&images,
  const std::array<vk::ImageCreateInfo,3>&ci,BbNativeAsync::Frame f){
  current_source=f.source;selected=false;attempted=false;
- if(!Enabled()||!armed.load(std::memory_order_acquire)||!peer||stopping||unknown||expired||
-    pending||peer->State()!=NativePreSrOwner::Phase::Ready||!BbNativeAsync::Finite(f)||attempt_count>=120||
-    (slot&&!slot->Done()))return {};
- if(!i.IsSeparateDepthStencilLayoutsEnabled()||!NativePreSrGpu::SourcesSupported(images,ci))return {};
- // All descriptors and source/return storage remain immutable until real final use.
+ if(!Enabled()){observation.reason="DISABLED";return {};}
+ if(!armed.load(std::memory_order_acquire)){observation.reason="BEFORE_ARM";return {};}
+ if(!peer){observation.reason="HELPER_NOT_STARTED";return {};}
+ if(stopping||unknown||expired){observation.reason=unknown?"QUARANTINE":expired?"ACCEPTANCE_EXPIRED":"STOPPING";return {};}
+ if(!BbNativeAsync::Finite(f)){observation.reason="SOURCE_METADATA_INVALID";return {};}
+ if(attempt_count>=BbPreSr::Hot120::MaxJobs){observation.reason="CAP_RETIRED";return {};}
+ if(!i.IsSeparateDepthStencilLayoutsEnabled()||!NativePreSrGpu::SourcesSupported(images,ci)){observation.reason="SOURCE_CI_UNSUPPORTED";return {};}
+ if(!pending&&peer->State()!=NativePreSrOwner::Phase::Ready){observation.reason="HELPER_NOT_READY";return {};}
  const auto begin=Clock::now();const auto deadline=begin+std::chrono::milliseconds(500);acceptance_deadline=deadline;
- if(seen_source&&f.source<=seen_source)return {};
+ if(!ReadyForNext(i,s,deadline))return {};
+ if(Clock::now()>=deadline){observation.reason="PRIOR_READY_BUDGET_EXPIRED";return {};}
+ if(seen_source&&f.source<=seen_source){observation.reason="SOURCE_NONMONOTONIC";return {};}
  if(seen_source&&(f.sr_reset||f.source!=seen_source+1))++history;
  f.epoch=attempt_count+1;f.history=history;seen_source=f.source;
- auto job=peer->TryReserve(f);if(!job)return {};
+ auto job=peer->TryReserve(f);if(!job){observation.reason="RESERVATION_BUSY_OR_STOPPED";return {};}
  pending=job;current_job=job->id.job;attempted=true;++attempt_count;
+ observation.job=current_job;observation.job_valid=true;observation.epoch=f.epoch;observation.history=f.history;observation.reason="MODEL_PENDING";
  try{
   if(!slot)slot=std::make_shared<Slot>(i,peer->Quiescence());
   Use(s);slot->gpu->RecordSource(s,images,ci);
   RecordPreSrInput(s,job->resources,job->id,slot->gpu->Converted(),job->input);Use(s);
   peer->InputRecorded(job);const auto input_tick=job->input->native_target_tick;
   s.Flush(); // Actual camera/source conversion/input release, before NR can run.
-  if(!WaitTarget(i,s,input_tick,deadline)){expired=true;stopping=true;peer->RequestStop(4);return {};}
+  if(!WaitTarget(i,s,input_tick,deadline)){observation.reason="INPUT_ACCEPTANCE_EXPIRED";expired=true;stopping=true;peer->RequestStop(4);return {};}
   while(peer->State()!=NativePreSrOwner::Phase::Complete&&Clock::now()<deadline){
    if(peer->State()==NativePreSrOwner::Phase::Failed)throw std::runtime_error("preSR peer failure while same-source pending");
    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  if(peer->State()!=NativePreSrOwner::Phase::Complete||Clock::now()>=deadline){expired=true;stopping=true;peer->RequestStop(4);return {};}
+  if(peer->State()!=NativePreSrOwner::Phase::Complete||Clock::now()>=deadline){observation.reason="MODEL_ACCEPTANCE_EXPIRED";expired=true;stopping=true;peer->RequestStop(4);return {};}
   const auto&c=job->complete;const auto&id=job->id;
   if(!c.verified_wire||!c.helper_GPU_complete||!c.helper_gpu_serial||c.identity.origin_source!=f.source||
      c.identity.origin_epoch!=f.epoch||c.identity.origin_history!=f.history||c.identity.params_version!=f.params||
@@ -165,22 +204,25 @@ vk::ImageView NativePreSrBridge::TryCurrent(const Instance&i,Scheduler&s,const s
   // For valid output, defer CONSUMED disposition until the caller has acquired
   // its fresh command buffer and confirmed the final same-frame acceptance cut.
   if(!selected)peer->FinalRecorded(job,skip?PreSrDisposition::ExpectedSkip:PreSrDisposition::ObsoleteDiscard);
+  observation.reason=selected?"NR_SELECTED":skip?"EXPECTED_SKIP":flag?"RETURN_GUARD_REJECTED":"RETURN_ACCEPTANCE_EXPIRED";
   if(!return_done||Clock::now()>=deadline){expired=true;stopping=true;peer->RequestStop(4);}
   std::printf("NATIVE_PRE_SR_DECISION session=%s job=%llu source=%llu NR_origin=%llu selected_NR720=%u native_input_tick=%llu native_return_tick=%llu helper_serial_source_only=%llu return_guard=%u same_source=%u hook_ms=%.6f soft_ms=500 original_input_immutable=1 phase=UNVERIFIED\n",Session().c_str(),(unsigned long long)id.job,(unsigned long long)f.source,(unsigned long long)id.origin_source,selected,(unsigned long long)input_tick,(unsigned long long)job->final->native_target_tick,(unsigned long long)c.helper_gpu_serial,flag,id.origin_source==f.source,std::chrono::duration<double,std::milli>(Clock::now()-begin).count());
   return selected?slot->gpu->ReturnView():vk::ImageView{};
- }catch(const std::exception&e){std::fprintf(stderr,"NATIVE_PRE_SR_FAILED source=%llu reason=%s SR_original_fallback=1\n",(unsigned long long)f.source,e.what());HoldUnknown();return {};}
+ }catch(const std::exception&e){std::fprintf(stderr,"NATIVE_PRE_SR_FAILED source=%llu reason=%s SR_original_fallback=1\n",(unsigned long long)f.source,e.what());observation.reason="QUARANTINE";HoldUnknown();return {};}
 }
 bool NativePreSrBridge::ConfirmBeforeSr(uint64_t source){
  if(source!=current_source||!selected||!pending||!peer)return false;
  const bool timely=Clock::now()<acceptance_deadline;
  peer->FinalRecorded(pending,timely?PreSrDisposition::Captured:PreSrDisposition::ObsoleteDiscard);
- if(!timely){selected=false;expired=true;stopping=true;peer->RequestStop(4);
+ if(!timely){observation.reason="FINAL_ACCEPTANCE_EXPIRED";selected=false;expired=true;stopping=true;peer->RequestStop(4);
   std::printf("NATIVE_PRE_SR_FINAL_ACCEPTANCE_EXPIRED source=%llu same_source_NR_to_SR=0 original_SR=1\n",(unsigned long long)source);
  }
  return timely;
 }
 void NativePreSrBridge::SrReadRecorded(const Instance&i,Scheduler&s,uint64_t source,bool ok,bool applied_sr_reset,
  vk::Image actual_SR_color,vk::ImageView actual_SR_view){
+ if(observation.source==source){observation.known=observation.supported&&ok;observation.selected=selected&&ok;
+  if(!ok)observation.reason="SR_API_FAILED";}
  if(source!=current_source||!selected)return;
  Use(s); // MUST include the actual SR read target, not just return conversion.
  std::printf("NATIVE_PRE_SR_ACTUAL_SR_READ session=%s source=%llu job=%llu target_tick=%llu SR_api_result=%u input720=%p\n",Session().c_str(),(unsigned long long)source,(unsigned long long)current_job,(unsigned long long)s.CurrentTick(),ok,(void*)VkImage(slot->gpu->ReturnImage()));
@@ -208,8 +250,9 @@ void NativePreSrBridge::SrReadRecorded(const Instance&i,Scheduler&s,uint64_t sou
  }
 }
 void NativePreSrBridge::MergeRecorded(Scheduler&s,uint64_t source){
- if(source!=current_source||!selected||!diagnostic)return;
- Use(s);diagnostic->PreSrMergeRecorded(s,source);
+ if(source!=current_source||!selected)return;
+ Use(s); // actual prior merge frontier even when cold diagnostic is disabled
+ if(diagnostic)diagnostic->PreSrMergeRecorded(s,source);
 }
 void NativePreSrBridge::Shutdown(Scheduler&s){
  stopping=true;arm_thread.request_stop();if(peer)peer->RequestStop(2);

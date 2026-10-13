@@ -67,6 +67,9 @@ struct C1PresentAudit {
     u64 buffer_prepare_gpu_frame = 0;
     u64 buffer_prepare_tick = 0;
     u64 present_frame_counter_before = 0;
+    bool pre_sr_selection_known = false, pre_sr_supported_SR = false, pre_sr_job_valid = false;
+    u64 pre_sr_epoch = 0, pre_sr_history = 0;
+    std::string pre_sr_fallback_reason = "NOT_MEASURED";
 };
 
 /// bbport BB_FINAL_DUMP_TRIGGER: the frame as presented (after FSR and post processing) is saved

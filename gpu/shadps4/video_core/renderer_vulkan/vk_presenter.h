@@ -48,6 +48,9 @@ struct Frame {
     std::string audit_mode;
     std::string audit_session;
     bool audit_selected_output = false;
+    bool pre_sr_selection_known = false, pre_sr_supported_SR = false, pre_sr_job_valid = false;
+    u64 pre_sr_epoch = 0, pre_sr_history = 0;
+    std::string pre_sr_fallback_reason = "NOT_MEASURED";
     bool p0_selection_known = false; // true only for this actual PrepareFrame, never a blank/replay guess
     u32 audit_nr_frame = 0;
     bool audit_full = true;
@@ -153,6 +156,8 @@ private:
     std::condition_variable free_cv;
     std::condition_variable_any frame_cv;
     std::vector<VAddr> vo_buffers_addr;
+    u64 pre_sr_passive_present_count = 0;
+
 };
 
 } // namespace Vulkan

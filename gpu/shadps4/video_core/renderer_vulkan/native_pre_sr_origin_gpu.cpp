@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "native_pre_sr_origin_gpu.h"
 #include "vk_scheduler.h"
+#include "native_pre_sr_hot120_policy.h"
 #include <stdexcept>
 namespace Vulkan {
 bool NativePreSrResources::Valid(const NativeOriginIdentity& id)const noexcept {
- if(!actual_import_fd_retired||!import_owner||session!=id.session||resource_set!=id.resource_set||native_queue_family==VK_QUEUE_FAMILY_IGNORED)return false;
+ if(!BbPreSr::Hot120::IdentityValid(id)||!actual_import_fd_retired||!import_owner||session!=id.session||resource_set!=id.resource_set||native_queue_family==VK_QUEUE_FAMILY_IGNORED)return false;
  for(unsigned k=0;k<4;k++){
   const auto& c=infos[k];
   if(!images[k]||!views[k]||c.format!=(k==1?vk::Format::eR32Sfloat:k==2?vk::Format::eR32G32Sfloat:vk::Format::eR32G32B32A32Sfloat)||

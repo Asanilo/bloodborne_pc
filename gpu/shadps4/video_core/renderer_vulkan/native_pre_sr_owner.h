@@ -33,6 +33,7 @@ public:
  bool SafeEmptyBootstrapExit(bool has_snapshot,bool pending_lease,uint64_t copies_ever)const noexcept;
  void JoinFinished(); // only after actual worker_finished; no peer/model wait
  int ActualWaitStatus()const noexcept{return actual_wait_status.load();}
+ uint64_t FinalizedCount()const noexcept{return finalized.load(std::memory_order_acquire);}
  bool ReapedNormally()const noexcept{return normal_reap.load(std::memory_order_acquire);}
 private:
  void Run(std::stop_token,const Instance&);

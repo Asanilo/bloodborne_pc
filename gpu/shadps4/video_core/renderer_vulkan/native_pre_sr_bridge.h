@@ -18,6 +18,8 @@ public:
  void MergeRecorded(Scheduler&,uint64_t actual_source);
  void Shutdown(Scheduler&);
  void RejectAssociation()noexcept;
+ void BeginSource(uint64_t source,bool supported,bool prior_audit_pending);
+ BbPreSr::Hot120::Observation Observation(uint64_t source)const noexcept;
  bool CurrentSelected(uint64_t source)const noexcept{return source==current_source&&selected;}
  bool CurrentAttempt(uint64_t source)const noexcept{return source==current_source&&attempted;}
  uint64_t CurrentJob()const noexcept{return current_job;}
@@ -38,6 +40,9 @@ private:
  void FinalizeLate(Scheduler&);
  void HoldUnknown()noexcept;
  static bool WaitTarget(const Instance&,Scheduler&,uint64_t,std::chrono::steady_clock::time_point);
+ bool ReadyForNext(const Instance&,Scheduler&,std::chrono::steady_clock::time_point);
+ void ObserveActualPreviousGpu(Scheduler&);
+ BbPreSr::Hot120::Observation observation;
  std::shared_ptr<NativePreSrOwner> peer;
  std::shared_ptr<Slot> slot;
  std::shared_ptr<NativeSkyDiagnostic> diagnostic;bool diagnostic_attempted=false;
