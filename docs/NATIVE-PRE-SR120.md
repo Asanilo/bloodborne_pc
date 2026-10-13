@@ -44,3 +44,21 @@ source cadence. Explicit ordinary dump trigger retained, automatic pixels0.
 CPU/BUILD_ONLY is not runtime/PRESENT120/phase/quality/performance PASS. Root
 matches raw120 before helper-start and all active Frames, including stalls,
 fallbacks and gaps. First cold/NR startup separately scored. No CPU pixels in hot.
+
+## Helper stream isolation increment
+
+The owner exclusively creates RUN/async-helper.log (regular file, exact0600,
+O_EXCL|O_NOFOLLOW|O_CLOEXEC) before spawning the private64 preloader. The child
+stdout and stderr both use that single file via posix_spawn dup2/close actions;
+parent FD/actions are cleaned on success and all errors. Existing file/symlink
+refuses spawn, never truncates prior evidence. Parent stdout/stderr, exact argv,
+Wine debug environment, identity/maps, source/lease/fence and budgets unchanged.
+No renderer file IO or new threads. Normal hot pixel/readback scope unchanged.
+
+Root skip120 actual source7396..7515 was continuous. Resident finalized/captured
+120, Eval/resolve/currentNRPresent120, no obsolete/skip, normal GPU/FD/model/reap
+passed; full audit/time statistics FAILED on interleaved Wine stderr in a Native
+cpu_monotonic_ns token. Preserve original failure; never repair/guess timestamps.
+This stream-isolation increment is CPU/BUILD_ONLY, runtime/benefit NOT_RUN. The
+CPU shell test is not Wine proof. Its initial65B output-length test wrongly
+expected75B; failure retained and assertion corrected, no production change.
