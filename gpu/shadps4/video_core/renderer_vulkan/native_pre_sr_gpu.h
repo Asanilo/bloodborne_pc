@@ -15,6 +15,9 @@ public:
                    const std::array<vk::ImageCreateInfo,3>&);
  void RecordReturn(Scheduler&,vk::ImageView actual_owned_output);
  std::array<vk::Image,3> Converted()const noexcept;
+ vk::Image OriginalColorImage()const noexcept{return vk::Image(source[0].image);}
+ const vk::ImageCreateInfo& OriginalColorCI()const noexcept{return source[0].image.image_ci;}
+ const vk::ImageCreateInfo& ReturnCI()const noexcept{return returned.image.image_ci;}
  vk::Image ReturnImage()const noexcept{return vk::Image(returned.image);}
  vk::ImageView ReturnView()const noexcept{return *returned.view;}
  uint32_t ReadGuardAfterGPUComplete(); // caller must independently prove target

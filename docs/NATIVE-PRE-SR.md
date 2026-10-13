@@ -73,3 +73,29 @@ NATIVE_PRE_SR_EXIT_NO_OWNER ledger proves absence, not normal Helper reap0 or NR
 Any created peer/import/snapshot/recorded use retains existing managed retirement
 and unknown hold. Source/frame math, job/reset/four counters,500ms and fences do
 not change. No GPU runtime or launch qualification is implied by CPU/build PASS.
+
+10554/Helper619 actual Root skip4/resident4 gate passed exact-source NR720->SR1080,
+GPU/FD/API/final-use/reap,4captured0obsolete. This is not quality/performance PASS.
+Evidence: runs/native-pre-sr-presr-real4-scene-a-20261013T121434.301911Z/native-pre-sr-root-audit.json.
+
+New cold visual opt-in BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE=1, resident only,
+default0. Reuse NativeSkyDiagnostic managed staging/writer/callback primitive.
+Once per session, only an accepted exact source whose actual DLSS SR call succeeds:
+copy private immutable original HDR97/720 and exact NR-return97/720 actually read
+by SR. Both actual creation-info format/extent/aspect/TransferSrc checked; original
+slot and output retain bridge real last-use lease for copy, SR read and merge.
+No extra Flush/model wait/CPU full read in renderer. Two7372800B files, total
+14745600B plus bounded manifest; diagnostic frame excluded from performance.
+Writer runs only after actual copy+SR target and actual merge target GPU callbacks.
+Writer is managed/joined; before normal window ExitComplete, both GPU completion
+callbacks and writer completion are required, writer joined and staging API
+buffers actually destroyed. Unknown failure retains staging and original owners.
+
+RUN/native-pre-sr-once/{original-hdr720.rgba16f,nr-sr-input720.rgba16f,readback.json}.
+Manifest source/job/epoch/history/params/input/return/SR-read/copy/merge and exact
+existing PRE_SR dump plus NATIVE_PRE_SR_CURRENT_PRESENT join predicates. Actual
+Present and final1080 are independently proven using those existing nonreuse
+ledger/Frame dumps, not by setting a pixel flag or comparing scheduler domains.
+No same-input separately computed SR-only1080 image exists: this is NOT a
+same-source SR-only1080 A/B. Pixels/phase/quality remain NOT_AUDITED/UNVERIFIED.
+New increment runtime NOT_RUN; only Root can authorize diagnostic GPU capture.

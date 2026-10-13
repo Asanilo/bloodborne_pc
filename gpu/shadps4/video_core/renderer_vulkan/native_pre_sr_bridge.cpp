@@ -3,6 +3,7 @@
 #include "vk_instance.h"
 #include "vk_scheduler.h"
 #include "p0_wait_budget.h"
+#include "native_sky_diagnostic.h"
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -53,7 +54,8 @@ void NativePreSrBridge::HoldUnknown()noexcept{
  unknown=true;stopping=true;if(peer)peer->RequestAbort();
  // Sticky resources: no last-use inference from N0, timeout or reset pointers.
  static auto*lock=new std::mutex;static auto*held=new std::vector<std::shared_ptr<Slot>>;
- if(slot){std::scoped_lock guard(*lock);held->push_back(slot);}
+ static auto*held_diagnostics=new std::vector<std::shared_ptr<NativeSkyDiagnostic>>;
+ if(slot||diagnostic){std::scoped_lock guard(*lock);if(slot)held->push_back(slot);if(diagnostic)held_diagnostics->push_back(diagnostic);}
  std::fprintf(stderr,"NATIVE_PRE_SR_QUARANTINE source=%llu normal_release=0 resources_held=1\n",(unsigned long long)current_source);
 }
 void NativePreSrBridge::RejectAssociation()noexcept{HoldUnknown();}
@@ -115,8 +117,8 @@ void NativePreSrBridge::Poll(const Instance&i,Scheduler&s,bool supported){
  if(stopping&&!unknown&&(!slot||slot->Done())){
   if(slot)slot.reset();
   else if(!peer->Quiescence()->last_use_tick.load())peer->Quiescence()->stopped_and_destroyed.store(true,std::memory_order_release);
-  if(BbNativeAsync::ExitRequested()&&peer->ReapedNormally()&&arm_finished.load(std::memory_order_acquire)){
-   peer->JoinFinished();if(arm_thread.joinable())arm_thread.join();BbNativeAsync::PublishExitComplete();
+  if(BbNativeAsync::ExitRequested()&&peer->ReapedNormally()&&arm_finished.load(std::memory_order_acquire)&&(!diagnostic||diagnostic->RetirePreSrFinished())){
+   peer->JoinFinished();if(arm_thread.joinable())arm_thread.join();if(diagnostic)diagnostic->JoinFinished();BbNativeAsync::PublishExitComplete();
   }
  }
 }
@@ -177,10 +179,37 @@ bool NativePreSrBridge::ConfirmBeforeSr(uint64_t source){
  }
  return timely;
 }
-void NativePreSrBridge::SrReadRecorded(Scheduler&s,uint64_t source,bool ok){
+void NativePreSrBridge::SrReadRecorded(const Instance&i,Scheduler&s,uint64_t source,bool ok,bool applied_sr_reset,
+ vk::Image actual_SR_color,vk::ImageView actual_SR_view){
  if(source!=current_source||!selected)return;
  Use(s); // MUST include the actual SR read target, not just return conversion.
  std::printf("NATIVE_PRE_SR_ACTUAL_SR_READ session=%s source=%llu job=%llu target_tick=%llu SR_api_result=%u input720=%p\n",Session().c_str(),(unsigned long long)source,(unsigned long long)current_job,(unsigned long long)s.CurrentTick(),ok,(void*)VkImage(slot->gpu->ReturnImage()));
+ if(ok&&BbPreSr::DiagnosticEnabled()&&!diagnostic_attempted&&slot&&pending){
+  diagnostic_attempted=true; // once per session, including allocation/admission failure
+  try{
+   const auto&f=pending->origin;const auto&id=pending->id;
+   NativeSkyDiagnostic::PreSrContext ctx{
+    .identity={{f.source,f.epoch,f.history,f.params},{id.origin_source,id.origin_epoch,id.origin_history,id.params_version},
+     id.job,pending->input->native_target_tick,pending->final->native_target_tick,s.CurrentTick(),
+     true,selected,ok,actual_SR_color==slot->gpu->ReturnImage()&&actual_SR_view==slot->gpu->ReturnView()},
+    .helper_serial=pending->complete.helper_gpu_serial,.resource_set=id.resource_set,
+    .applied_sr_reset=applied_sr_reset};
+   diagnostic=std::make_shared<NativeSkyDiagnostic>(i,NativeSkyDiagnostic::PreSrTag{});
+   Use(s); // real copy/SR target retains immutable source and exact selected return
+   if(!diagnostic->RecordPreSrOnce(s,slot->gpu->OriginalColorImage(),slot->gpu->ReturnImage(),
+       {slot->gpu->OriginalColorCI(),slot->gpu->ReturnCI()},f,ctx)){
+    std::fprintf(stderr,"NATIVE_PRE_SR_DIAGNOSTIC_NOT_RECORDED source=%llu admission=REJECTED\n",(unsigned long long)source);
+    diagnostic.reset(); // no commands recorded on admission rejection
+   }
+  }catch(const std::exception&e){
+   std::fprintf(stderr,"NATIVE_PRE_SR_DIAGNOSTIC_RECORD_FAILED source=%llu reason=%s\n",(unsigned long long)source,e.what());
+   HoldUnknown(); // never free potentially recorded staging on an unknown failure
+  }
+ }
+}
+void NativePreSrBridge::MergeRecorded(Scheduler&s,uint64_t source){
+ if(source!=current_source||!selected||!diagnostic)return;
+ Use(s);diagnostic->PreSrMergeRecorded(s,source);
 }
 void NativePreSrBridge::Shutdown(Scheduler&s){
  stopping=true;arm_thread.request_stop();if(peer)peer->RequestStop(2);

@@ -50,6 +50,22 @@ struct SourceIdentity {
  bool Valid()const noexcept{return source&&epoch&&history&&params==1&&original720&&hdr&&!source_edited;}
  bool Exact(const SourceIdentity&x)const noexcept{return Valid()&&x.Valid()&&source==x.source&&epoch==x.epoch&&history==x.history&&params==x.params;}
 };
+// Cold visual diagnostic admission only, not a model/image-quality grant.
+inline bool DiagnosticEnabled()noexcept {
+ const char*d=std::getenv("BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE");
+ const char*m=std::getenv("BB_NR_NATIVE_ORIGIN_MODE");
+ return Enabled()&&d&&m&&std::strcmp(d,"1")==0&&std::strcmp(m,"resident")==0;
+}
+inline constexpr uint64_t DiagnosticImageBytes=1280ull*720*8;
+struct DiagnosticIdentity {
+ SourceIdentity current,result;
+ uint64_t job=0,input_tick=0,return_tick=0,sr_read_tick=0;
+ bool resident=false,selected=false,sr_success=false,actual_image_match=false;
+ bool Eligible()const noexcept {
+  return resident&&selected&&sr_success&&actual_image_match&&current.Exact(result)&&job<4&&
+   input_tick&&return_tick>=input_tick&&sr_read_tick>=return_tick;
+ }
+};
 struct InputDomain {
  bool nr=false;
  bool Change(bool next)noexcept{const bool changed=next!=nr;nr=next;return changed;}

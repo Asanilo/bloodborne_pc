@@ -4,6 +4,7 @@
 #include "native_pre_sr_owner.h"
 #include <thread>
 namespace Vulkan {
+class NativeSkyDiagnostic;
 class NativePreSrBridge {
 public:
  ~NativePreSrBridge(){arm_thread.request_stop();if(arm_thread.joinable())arm_thread.join();} // before atomic member teardown
@@ -12,7 +13,9 @@ public:
  vk::ImageView TryCurrent(const Instance&,Scheduler&,const std::array<vk::Image,3>&,
    const std::array<vk::ImageCreateInfo,3>&,BbNativeAsync::Frame);
  bool ConfirmBeforeSr(uint64_t source); // final soft-cutoff after fresh command buffer acquisition
- void SrReadRecorded(Scheduler&,uint64_t source,bool SR_api_success);
+ void SrReadRecorded(const Instance&,Scheduler&,uint64_t source,bool SR_api_success,bool applied_sr_reset,
+                     vk::Image actual_SR_color,vk::ImageView actual_SR_view);
+ void MergeRecorded(Scheduler&,uint64_t actual_source);
  void Shutdown(Scheduler&);
  void RejectAssociation()noexcept;
  bool CurrentSelected(uint64_t source)const noexcept{return source==current_source&&selected;}
@@ -37,6 +40,7 @@ private:
  static bool WaitTarget(const Instance&,Scheduler&,uint64_t,std::chrono::steady_clock::time_point);
  std::shared_ptr<NativePreSrOwner> peer;
  std::shared_ptr<Slot> slot;
+ std::shared_ptr<NativeSkyDiagnostic> diagnostic;bool diagnostic_attempted=false;
  std::shared_ptr<NativePreSrOwner::Job> pending;
  std::jthread arm_thread;std::atomic<bool> armed{false},arm_finished{true},helper_start_requested{false};
  bool arm_started=false,stopping=false,unknown=false,selected=false,attempted=false;

@@ -42,5 +42,19 @@ int main(){unsigned cases=0;auto check=[&](bool x){++cases;if(!x)std::abort();};
  x=exit;x.maximum_native_use_tick=1;check(!BbPreSr::CanExitWithoutPeer(x)); // N0 never excuses an actual GPU use
  setenv("BB_NR_NATIVE_PRE_SR_SCENE_FIRST","0",1);check(!BbPreSr::SceneFirstEnabled());
  setenv("BB_NR_NATIVE_PRE_SR_SCENE_FIRST","1",1);check(BbPreSr::SceneFirstEnabled());unsetenv("BB_NR_NATIVE_PRE_SR_SCENE_FIRST");check(!BbPreSr::SceneFirstEnabled());
+ const BbPreSr::DiagnosticIdentity dg{a,a,0,10,12,13,true,true,true,true};check(dg.Eligible());
+ auto gd=dg;gd.job=3;gd.sr_read_tick=gd.return_tick;check(gd.Eligible());
+ auto reject_diag=[&](auto change){auto t=dg;change(t);check(!t.Eligible());};
+ reject_diag([](auto&t){t.result.source--;});reject_diag([](auto&t){t.result.epoch++;});
+ reject_diag([](auto&t){t.result.history++;});reject_diag([](auto&t){t.job=4;});
+ reject_diag([](auto&t){t.input_tick=0;});reject_diag([](auto&t){t.return_tick=9;});
+ reject_diag([](auto&t){t.sr_read_tick=11;});reject_diag([](auto&t){t.resident=false;});
+ reject_diag([](auto&t){t.selected=false;});reject_diag([](auto&t){t.sr_success=false;});
+ reject_diag([](auto&t){t.actual_image_match=false;});check(BbPreSr::DiagnosticImageBytes==7372800);
+ setenv("BB_NR_NATIVE_PRE_SR","1",1);setenv("BB_NR_NATIVE_ORIGIN_MODE","resident",1);
+ setenv("BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE","1",1);check(BbPreSr::DiagnosticEnabled());
+ setenv("BB_NR_NATIVE_ORIGIN_MODE","skipEvaluate",1);check(!BbPreSr::DiagnosticEnabled());
+ setenv("BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE","0",1);check(!BbPreSr::DiagnosticEnabled());
+ unsetenv("BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE");unsetenv("BB_NR_NATIVE_ORIGIN_MODE");unsetenv("BB_NR_NATIVE_PRE_SR");
  std::printf("{\"status\":\"PASS\",\"cases\":%u,\"scope\":\"production_same_source_profile_domain_reset_finite_wait_CPU_only\"}\n",cases);
 }

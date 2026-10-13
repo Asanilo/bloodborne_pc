@@ -2008,6 +2008,7 @@ void TemporalUpscaler::Run() {
         if (q1_frame_processed) q1_game_bridge.EndMergeTiming(scheduler);
         if (p0_frame_processed) p0_controller.EndMergeTiming(scheduler);
         if(native_pre_sr.Enabled()&&native_pre_sr.CurrentAttempt(source_game_frame)){
+            native_pre_sr.MergeRecorded(scheduler,source_game_frame);
             std::scoped_lock lock{c1_audit_mutex};
             if(native_pre_sr_pending_audit)throw std::runtime_error("preSR cannot overwrite pending current-source ledger");
             native_pre_sr_pending_audit=C1PresentAudit{.stage="PRE_SR",.mode=native_pre_sr.CurrentSelected(source_game_frame)?"NR-before-SR":"original-SR-fallback",
@@ -3349,7 +3350,7 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
             .sharpness = settings.sharpen ? std::min(settings.sharpness.load(), 1.0f) : 0.0f,
         });
         if (sr_timing_slot) p0_sr_timing->End(cmdbuf,scheduler,*sr_timing_slot,sr_timing_source,ok);
-        native_pre_sr.SrReadRecorded(scheduler,pre_source,ok);
+        native_pre_sr.SrReadRecorded(instance,scheduler,pre_source,ok,reset,sr_color.image,sr_color.view);
     }
     if (ok) {
         const u64 source_frame = BbStats::gpu_frames.load(std::memory_order_relaxed);
