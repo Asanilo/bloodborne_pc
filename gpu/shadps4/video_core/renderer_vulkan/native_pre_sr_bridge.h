@@ -6,6 +6,7 @@
 namespace Vulkan {
 class NativePreSrBridge {
 public:
+ ~NativePreSrBridge(){arm_thread.request_stop();if(arm_thread.joinable())arm_thread.join();} // before atomic member teardown
  bool Enabled()const noexcept{return BbPreSr::Enabled();}
  void Poll(const Instance&,Scheduler&,bool supported);
  vk::ImageView TryCurrent(const Instance&,Scheduler&,const std::array<vk::Image,3>&,
@@ -37,10 +38,11 @@ private:
  std::shared_ptr<NativePreSrOwner> peer;
  std::shared_ptr<Slot> slot;
  std::shared_ptr<NativePreSrOwner::Job> pending;
- std::jthread arm_thread;std::atomic<bool> armed{false},arm_finished{true};
+ std::jthread arm_thread;std::atomic<bool> armed{false},arm_finished{true},helper_start_requested{false};
  bool arm_started=false,stopping=false,unknown=false,selected=false,attempted=false;
  bool expired=false;BbPreSr::InputDomain domain;
  std::chrono::steady_clock::time_point acceptance_deadline{};
  uint64_t current_source=0,current_job=0,seen_source=0,history=1,attempt_count=0;
+ uint64_t maximum_native_use_tick=0; // actual recorded Native use, never Helper fence serial
 };
 }

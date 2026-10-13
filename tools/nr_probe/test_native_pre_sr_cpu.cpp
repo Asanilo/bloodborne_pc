@@ -29,5 +29,18 @@ int main(){unsigned cases=0;auto check=[&](bool x){++cases;if(!x)std::abort();};
  namespace P=Vulkan::P0Wait;check(P::Remaining(500000000,0).nanoseconds==500000000);check(P::Remaining(500000000,500000000).kind==P::BudgetKind::Expired);
  check(P::Classify(P::Success,true,false)==P::Outcome::Expired);check(P::Classify(P::Success,false,true)==P::Outcome::InvalidSuccess);check(P::Classify(-4,false,true)==P::Outcome::Error);
  check(P::Classify(P::Timeout,false,true)==P::Outcome::Expired);check(P::Classify(P::Success,true,true)==P::Outcome::Completed);
+ check(BbPreSr::ExactSceneToken("pre-test\n","pre-test"));
+ for(const auto token:{"pre-test","pre-test\r\n","other\n","pre-test\nextra","pre-test\n\n"})check(!BbPreSr::ExactSceneToken(token,"pre-test"));
+ check(!BbPreSr::ExactSceneToken("\n",""));
+ check(!BbPreSr::ExactSceneToken(std::string(64,'x')+"\n",std::string(64,'x')));
+ check(BbPreSr::CanStartPeer(true,true,false));
+ check(!BbPreSr::CanStartPeer(false,true,false));check(!BbPreSr::CanStartPeer(true,false,false));check(!BbPreSr::CanStartPeer(true,true,true));
+ BbPreSr::NoPeerExitProof exit{true,true,true,true,false,0,0};check(BbPreSr::CanExitWithoutPeer(exit));
+ auto x=exit;x.no_owner=false;check(!BbPreSr::CanExitWithoutPeer(x));x=exit;x.no_snapshot=false;check(!BbPreSr::CanExitWithoutPeer(x));
+ x=exit;x.no_pending=false;check(!BbPreSr::CanExitWithoutPeer(x));x=exit;x.arm_joined=false;check(!BbPreSr::CanExitWithoutPeer(x));
+ x=exit;x.unknown=true;check(!BbPreSr::CanExitWithoutPeer(x));x=exit;x.attempted_jobs=1;check(!BbPreSr::CanExitWithoutPeer(x));
+ x=exit;x.maximum_native_use_tick=1;check(!BbPreSr::CanExitWithoutPeer(x)); // N0 never excuses an actual GPU use
+ setenv("BB_NR_NATIVE_PRE_SR_SCENE_FIRST","0",1);check(!BbPreSr::SceneFirstEnabled());
+ setenv("BB_NR_NATIVE_PRE_SR_SCENE_FIRST","1",1);check(BbPreSr::SceneFirstEnabled());unsetenv("BB_NR_NATIVE_PRE_SR_SCENE_FIRST");check(!BbPreSr::SceneFirstEnabled());
  std::printf("{\"status\":\"PASS\",\"cases\":%u,\"scope\":\"production_same_source_profile_domain_reset_finite_wait_CPU_only\"}\n",cases);
 }

@@ -55,3 +55,21 @@ BUILD_ONLY/CPU are offline gates. No GPU runtime, game pixels/phase, performance
 quality or playable PASS. Soft deadline cannot preempt a blocked graphics driver.
 Original async825114/4, P0/P3, formal files/real saves/twoC1 and Root budgets remain
 protected. Root alone chooses bounded runtime cases. Failures are preserved.
+
+Scene-first preparation delta (default flag0 preserves the frozen first candidate):
+Root sets BB_NR_NATIVE_PRE_SR_SCENE_FIRST=1. The existing managed StartArm thread
+checks RUN/native-helper-start every100ms; content must be exactly SESSION newline,
+no CRLF/extra bytes/other session. It publishes only helper_start_requested atomic.
+Renderer Poll creates Peer only when actual supported route and that request are
+true, never reads files; Root first proves Clinic, writes helper-start, then waits
+for actual model/import FD_READY before existing native-scene-arm. No wire delta.
+No start file does not claim unsupported/failed model and leaves current raw SR.
+
+Window close before any Peer creation stops and joins the preparation thread before
+ExitComplete. Actual peer absence, slot/snapshot absence, pending absence, attempted
+jobs0 AND maximum recorded Native use tick0, no unknown state and actual thread
+join are independently checked. N0 alone never grants release/exit. New explicit
+NATIVE_PRE_SR_EXIT_NO_OWNER ledger proves absence, not normal Helper reap0 or NR.
+Any created peer/import/snapshot/recorded use retains existing managed retirement
+and unknown hold. Source/frame math, job/reset/four counters,500ms and fences do
+not change. No GPU runtime or launch qualification is implied by CPU/build PASS.

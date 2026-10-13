@@ -5,6 +5,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <array>
+#include <string_view>
 namespace BbPreSr {
 inline bool Enabled()noexcept {
  const char*p=std::getenv("BB_NR_NATIVE_PRE_SR");if(!p||std::strcmp(p,"1"))return false;
@@ -12,6 +13,26 @@ inline bool Enabled()noexcept {
   const char*v=std::getenv(k);if(v&&v[0]&&std::strcmp(v,"0"))return false;
  }
  return true;
+}
+// Local preparation gate only; not Helper protocol or a GPU completion proof.
+inline bool SceneFirstEnabled()noexcept {
+ const char*p=std::getenv("BB_NR_NATIVE_PRE_SR_SCENE_FIRST");
+ return p&&std::strcmp(p,"1")==0;
+}
+inline bool ExactSceneToken(std::string_view bytes,std::string_view session)noexcept {
+ return !session.empty()&&session.size()<=63&&bytes.size()==session.size()+1&&
+  bytes.substr(0,session.size())==session&&bytes.back()=='\n';
+}
+inline bool CanStartPeer(bool supported,bool requested,bool exiting)noexcept {
+ return supported&&requested&&!exiting;
+}
+struct NoPeerExitProof {
+ bool no_owner=false,no_snapshot=false,no_pending=false,arm_joined=false,unknown=false;
+ uint64_t attempted_jobs=0,maximum_native_use_tick=0;
+};
+inline bool CanExitWithoutPeer(const NoPeerExitProof&p)noexcept {
+ return p.no_owner&&p.no_snapshot&&p.no_pending&&p.arm_joined&&!p.unknown&&
+  p.attempted_jobs==0&&p.maximum_native_use_tick==0;
 }
 struct SourceCI {
  uint32_t format=0,width=0,height=0,depth=0,samples=0,mips=0,layers=0;bool transfer_src=false;

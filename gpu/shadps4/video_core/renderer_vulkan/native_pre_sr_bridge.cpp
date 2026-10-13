@@ -15,20 +15,35 @@ std::string Env(const char*k){const char*p=std::getenv(k);return p?p:"";}
 std::string NativePreSrBridge::Session()const{return Env("BB_NR_NATIVE_PRE_SR_SESSION");}
 void NativePreSrBridge::StartArm(){
  if(arm_started)return;arm_started=true;
+ const bool scene_first=BbPreSr::SceneFirstEnabled();
+ helper_start_requested.store(!scene_first,std::memory_order_release);
  const auto session=Session(),run=Env("BB_NR_NATIVE_PRE_SR_RUN_DIR");
  if(session.empty()||run!="/home/arinp/Code/nrbridge-design/game-poc-20261011/bbport/runs/native-pre-sr-game-"+session)return;
- arm_finished.store(false);arm_thread=std::jthread([this,run,session](std::stop_token stop){
+ arm_finished.store(false);arm_thread=std::jthread([this,run,session,scene_first](std::stop_token stop){
   struct End{std::atomic<bool>&f;~End(){f.store(true,std::memory_order_release);}} end{arm_finished};
+  // All local file IO stays on this managed preparation thread, not renderer.
+  const auto token_matches=[&](const char*name){
+   std::ifstream f(run+"/"+name,std::ios::binary);char b[65]{};
+   if(!f)return false;f.read(b,sizeof(b));
+   return BbPreSr::ExactSceneToken(std::string_view(b,size_t(f.gcount())),session);
+  };
   const auto limit=Clock::now()+std::chrono::seconds(300);
-  while(!stop.stop_requested()&&Clock::now()<limit){std::ifstream f(run+"/native-scene-arm",std::ios::binary);
-   char b[65]{};if(f){f.read(b,sizeof(b));if(std::string(b,size_t(f.gcount()))==session+"\n"){
-    armed.store(true,std::memory_order_release);std::printf("NATIVE_PRE_SR_ARM session=%s scene_proof=REQUIRES_ROOT\n",session.c_str());return;}}
+  while(!stop.stop_requested()&&Clock::now()<limit){
+   if(scene_first&&!helper_start_requested.load(std::memory_order_acquire)&&token_matches("native-helper-start")){
+    helper_start_requested.store(true,std::memory_order_release);
+    std::printf("NATIVE_PRE_SR_HELPER_START_REQUEST session=%s scene_first=1 scene_proof=REQUIRES_ROOT GPU_proof=NONE\n",session.c_str());
+   }
+   if(!armed.load(std::memory_order_acquire)&&token_matches("native-scene-arm")){
+    armed.store(true,std::memory_order_release);
+    std::printf("NATIVE_PRE_SR_ARM session=%s scene_proof=REQUIRES_ROOT\n",session.c_str());
+   }
+   if(armed.load(std::memory_order_acquire)&&helper_start_requested.load(std::memory_order_acquire))return;
    std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
  });
 }
 void NativePreSrBridge::Use(Scheduler&s){
- if(!slot||!peer)return;const auto t=s.CurrentTick();slot->last_use=std::max(slot->last_use,t);
+ if(!slot||!peer)return;const auto t=s.CurrentTick();maximum_native_use_tick=std::max(maximum_native_use_tick,t);slot->last_use=std::max(slot->last_use,t);
  auto q=peer->Quiescence();auto old=q->last_use_tick.load();while(old<t&&!q->last_use_tick.compare_exchange_weak(old,t)){}
  s.DeferPriorityOperation([hold=slot,q,t]{auto n=hold->observed.load();while(n<t&&!hold->observed.compare_exchange_weak(n,t)){}
   n=q->observed_tick.load();while(n<t&&!q->observed_tick.compare_exchange_weak(n,t)){}
@@ -68,7 +83,21 @@ void NativePreSrBridge::FinalizeLate(Scheduler&s){
 }
 void NativePreSrBridge::Poll(const Instance&i,Scheduler&s,bool supported){
  if(!Enabled())return;StartArm();
- if(!peer&&supported){peer=std::make_shared<NativePreSrOwner>();peer->Start(i);}
+ const bool exiting=BbNativeAsync::ExitRequested();
+ if(exiting&&!peer){
+  stopping=true;arm_thread.request_stop();if(arm_thread.joinable())arm_thread.join();
+  const BbPreSr::NoPeerExitProof proof{!peer,!slot,!pending,
+   arm_finished.load(std::memory_order_acquire)&&!arm_thread.joinable(),unknown,
+   attempt_count,maximum_native_use_tick};
+  if(BbPreSr::CanExitWithoutPeer(proof)){
+   std::printf("NATIVE_PRE_SR_EXIT_NO_OWNER session=%s actual_no_owner=1 actual_no_snapshot=1 actual_no_pending=1 maximum_native_use_tick=0 arm_joined=1 no_peer_created=1 no_NR_claim=1\n",Session().c_str());
+   BbNativeAsync::PublishExitComplete();
+  }
+  return;
+ }
+ if(!peer&&BbPreSr::CanStartPeer(supported,helper_start_requested.load(std::memory_order_acquire),exiting)){
+  peer=std::make_shared<NativePreSrOwner>();peer->Start(i);
+ }
  if(!peer)return;
  if(BbNativeAsync::ExitRequested()){stopping=true;peer->RequestStop(2);arm_thread.request_stop();}
  if(!supported&&slot){stopping=true;peer->RequestStop(3);}
