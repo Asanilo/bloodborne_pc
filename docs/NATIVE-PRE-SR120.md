@@ -47,10 +47,15 @@ fallbacks and gaps. First cold/NR startup separately scored. No CPU pixels in ho
 
 ## Helper stream isolation increment
 
-The owner exclusively creates RUN/async-helper.log (regular file, exact0600,
-O_EXCL|O_NOFOLLOW|O_CLOEXEC) before spawning the private64 preloader. The child
-stdout and stderr both use that single file via posix_spawn dup2/close actions;
-parent FD/actions are cleaned on success and all errors. Existing file/symlink
+The owner exclusively creates RUN/async-helper-launch.log (regular file,
+exact0600, O_EXCL|O_NOFOLLOW|O_CLOEXEC) before spawning the private64 preloader.
+Inherited startup stdout and stderr use that single file via posix_spawn
+ dup2/close actions; parent FD/actions are cleaned on success and all errors.
+The fixed PE main later reopens its original async-helper.log (stdout wb) and
+async-helper-stderr.log (stderr wb), unchanged. Those distinct PE paths cannot
+truncate the launch file. This is startup capture scope, not all later warnings
+in one file. WINEDEBUG remains unchanged. CPU regression emits startup streams
+then actual freopen wb both PE-style files and checks all3 exact outputs. Existing file/symlink
 refuses spawn, never truncates prior evidence. Parent stdout/stderr, exact argv,
 Wine debug environment, identity/maps, source/lease/fence and budgets unchanged.
 No renderer file IO or new threads. Normal hot pixel/readback scope unchanged.
@@ -62,3 +67,9 @@ cpu_monotonic_ns token. Preserve original failure; never repair/guess timestamps
 This stream-isolation increment is CPU/BUILD_ONLY, runtime/benefit NOT_RUN. The
 CPU shell test is not Wine proof. Its initial65B output-length test wrongly
 expected75B; failure retained and assertion corrected, no production change.
+
+Launch-path correction keeps header bytes/FD actions unchanged. The old same-name
+path could be truncated by PE main wb, but actual historical warning loss is not
+proven. Original run/log/audit evidence and Root1afb real120-b PASS timing/normal
+retirement remain untouched; this does not revise its measured FPS or claim new
+runtime validation. New startup-log correction is CPU/BUILD_ONLY, not Wine proof.
