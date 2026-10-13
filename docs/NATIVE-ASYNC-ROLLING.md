@@ -24,9 +24,23 @@ cover new commands. Callback closures retain old immutable lease objects. Histor
 bank read/write uses are tracked separately from raw packets; merge samples only
 actual selected current output (thus marks that packet), not every old packet.
 Packet capacity busy is bounded raw fallback and invalidates continuity.
-Packed texel expectation970722288B (old694242288 +2*138240000), image VMA actual
-allocation regions logged independently; CB/logicalbytes and hidden model/driver
-VRAM not included in that actual image sum. No extra historycache/model/sharedslot.
+Packed image accounting:7 raw packets * (16588800+7372800+3686400) =
+193536000B; Sky converted/output/replay/banks/dummy images =915426288B;
+total1108962288B across71 images. The old5 raw+Sky total was832482288B,
+so two added packets still cost276480000B (2*138240000), within the authorized
+incremental cap. The original175953 freeze/docs reported970722288B incorrectly
+by excluding raw images from the old baseline; that historical accounting is
+retained as ERROR, not MATCH. Runtime image summation/logger was already correct.
+VMA actual allocation regions are logged independently; CB/logicalbytes and
+hidden model/driver VRAM are not included. No extra historycache/model/sharedslot.
+
+Build dependency mounts temporarily replace empty gitlink directories with
+symlinks to private local dependency copies. Stable dependency sources are read
+only; FSR patches apply only to the private copy without its .git. Default Git
+status can error on the fsr-vulkan symlink and is not a universal clean proof.
+Use tracked status with --ignore-submodules=all plus explicit dependency source,
+copy and patched-content SHA manifests. build_c0.sh restores empty mountpoints
+on exit; record actual status return/output and link state at verification time.
 
 Same two-arg launcher tools/nr_probe/run_game_native_async.sh SESSION MODE;
 use rolling1 +sceneFirst1, Clinic -> native-helper-start -> actualReady -> scene-arm.
