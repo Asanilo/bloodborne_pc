@@ -5,6 +5,9 @@ set -euo pipefail
 SESSION=$1 MODE=$2
 SCENE_FIRST=${BB_NR_NATIVE_PRE_SR_SCENE_FIRST:-0}
 DIAGNOSTIC_ONCE=${BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE:-0}
+PRESENT_READBACK=${BB_NR_NATIVE_PRE_SR_PRESENT_READBACK-1}
+[[ $PRESENT_READBACK == 0 || $PRESENT_READBACK == 1 ]] || { echo 'NATIVE_PRE_SR_LAUNCH BLOCKED present-readback must be exact 0|1' >&2; exit 2; }
+[[ $PRESENT_READBACK == 1 || ( ( $MODE == resident || $MODE == skipEvaluate ) && $DIAGNOSTIC_ONCE == 0 ) ]] || { echo 'NATIVE_PRE_SR_LAUNCH BLOCKED present-readback0 requires resident|skipEvaluate and diagnostic-once0' >&2; exit 2; }
 [[ $DIAGNOSTIC_ONCE == 0 || ( $DIAGNOSTIC_ONCE == 1 && $MODE == resident ) ]] || { echo 'NATIVE_PRE_SR_LAUNCH BLOCKED diagnostic-once requires resident and 0|1' >&2; exit 2; }
 [[ $SCENE_FIRST == 0 || $SCENE_FIRST == 1 ]] || { echo 'NATIVE_PRE_SR_LAUNCH BLOCKED scene-first must be 0|1' >&2; exit 2; }
 [[ $SESSION =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$ && ( $MODE == resident || $MODE == skipEvaluate ) ]] || exit 2
@@ -55,6 +58,7 @@ export BB_NR_NATIVE_PRE_SR=1 BB_NR_NATIVE_PRE_SR_SESSION="$SESSION"
 export BB_NR_NATIVE_PRE_SR_RUN_DIR="$RUN"
 export BB_NR_NATIVE_PRE_SR_SCENE_FIRST="$SCENE_FIRST"
 export BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE="$DIAGNOSTIC_ONCE"
+export BB_NR_NATIVE_PRE_SR_PRESENT_READBACK="$PRESENT_READBACK"
 export BB_NR_NATIVE_ORIGIN_RUN_DIR="$RUN" BB_NR_NATIVE_ORIGIN_HELPER="$HELPER"
 export BB_NR_NATIVE_ORIGIN_WINE="$GE/files/lib/wine/x86_64-unix/wine"
 export BB_NR_NATIVE_ORIGIN_PRELOADER="$GE/files/lib/wine/x86_64-unix/wine-preloader"

@@ -99,3 +99,23 @@ ledger/Frame dumps, not by setting a pixel flag or comparing scheduler domains.
 No same-input separately computed SR-only1080 image exists: this is NOT a
 same-source SR-only1080 A/B. Pixels/phase/quality remain NOT_AUDITED/UNVERIFIED.
 New increment runtime NOT_RUN; only Root can authorize diagnostic GPU capture.
+
+253ed5e visual4-b Root runtime gate passed4 exact-source NR->SR Presents,
+once pair14745600B,921600 original/return alpha half bits equal and actual
+copy/SR/merge/writer/staging/API/FD/reap retirement. Quality/phase UNVERIFIED.
+Evidence: runs/native-pre-sr-presr-visual4-b-20261013T132528.862324Z/native-pre-sr-root-audit.json.
+visual-a was no-peer/no-snapshot normal preparation close, not an NR test.
+
+Native-only hot4 dump-side opt-in: BB_NR_NATIVE_PRE_SR_PRESENT_READBACK=0|1,
+default1 preserves old diagnostic automatic PRE_SR Frame dump.0 allowed only
+resident|skipEvaluate with BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE=0. Launcher rejects
+invalid/empty flag and conflicting diagnostic1. Native invalid direct configs
+conservatively keep automatic readback.0 skips only PRE_SR automatic
+DumpPresented allocation/full pixel copy/CPU file write in PrepareFrame.
+NATIVE_PRE_SR_PRESENT_READBACK_POLICY reports actual policy and automatic bytes.
+Actual Frame/source association, merge/last-use, nonreuse CurrentPresent and
+all necessary SR/API/timeline/guard4B/lease/retirement remain unchanged. Explicit
+ordinary Present dump trigger still runs its old branch and is not included in
+automatic_pixel_readback_bytes0. All old C1/Q1/C4/P0/async policies unchanged.
+No added Flush/wait; max4/Helper619/profile/wire/counters unchanged. New policy
+runtime/performance NOT_RUN; Root alone runs the next bounded hot4 gate.

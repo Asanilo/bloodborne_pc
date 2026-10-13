@@ -56,6 +56,21 @@ inline bool DiagnosticEnabled()noexcept {
  const char*m=std::getenv("BB_NR_NATIVE_ORIGIN_MODE");
  return Enabled()&&d&&m&&std::strcmp(d,"1")==0&&std::strcmp(m,"resident")==0;
 }
+// Dump-side policy only. Invalid direct env configurations conservatively keep
+// the old automatic readback; launcher rejects them before game start.
+inline bool ValidPresentReadbackConfiguration(std::string_view flag,std::string_view mode,bool diagnostic)noexcept {
+ return (flag=="0"||flag=="1")&&(mode=="resident"||mode=="skipEvaluate")&&
+  (!diagnostic||(mode=="resident"&&flag=="1"));
+}
+inline bool AutomaticPresentReadback()noexcept {
+ if(!Enabled())return true;
+ const char*p=std::getenv("BB_NR_NATIVE_PRE_SR_PRESENT_READBACK");
+ const char*m=std::getenv("BB_NR_NATIVE_ORIGIN_MODE");
+ const char*d=std::getenv("BB_NR_NATIVE_PRE_SR_DIAGNOSTIC_ONCE");
+ const std::string_view flag=p?p:"1",mode=m?m:"";
+ const bool diagnostic=d&&std::strcmp(d,"0")!=0;
+ return !(flag=="0"&&ValidPresentReadbackConfiguration(flag,mode,diagnostic));
+}
 inline constexpr uint64_t DiagnosticImageBytes=1280ull*720*8;
 struct DiagnosticIdentity {
  SourceIdentity current,result;

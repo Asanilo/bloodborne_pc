@@ -392,7 +392,12 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             cpu_address, frame_counter_before, gpu_frame_at_prepare, prepare_tick, c1_audit);
         // The 1:1 HDR Run route consumes the actual guest VideoOut buffer, not the scaled
         // display override. Bind this one-shot ledger to that real address and buffer.
-        if (c1_selected && ((c1_audit.stage != "C3" && c1_audit.stage != "C4" && c1_audit.stage != "P0" && c1_audit.stage != "NATIVE_ASYNC") || c1_audit.audit_full)) {
+        const bool pre_sr_automatic_readback = c1_audit.stage != "PRE_SR" || BbPreSr::AutomaticPresentReadback();
+        if (c1_selected && c1_audit.stage == "PRE_SR")
+            std::printf("NATIVE_PRE_SR_PRESENT_READBACK_POLICY session=%s source_game_frame=%llu job=%u automatic_present_readback=%u automatic_full_pixel_readback_bytes=%llu scope=PRE_SR_automatic_Frame_dump_only explicit_dump_trigger=UNCHANGED actual_Frame_ledger=UNCHANGED guard_timestamps=UNCHANGED\n",
+                c1_audit.session.c_str(),(unsigned long long)c1_audit.source_game_frame,c1_audit.nr_frame,
+                pre_sr_automatic_readback,(unsigned long long)(pre_sr_automatic_readback?uint64_t(image_size.width)*image_size.height*4:0));
+        if (c1_selected && pre_sr_automatic_readback && ((c1_audit.stage != "C3" && c1_audit.stage != "C4" && c1_audit.stage != "P0" && c1_audit.stage != "NATIVE_ASYNC") || c1_audit.audit_full)) {
             runtime.Transit(&image, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eTransfer,
                             vk::AccessFlagBits2::eTransferRead);
             runtime.FlushBarriers();
