@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "native_async_snapshot.h"
+#include "native_async_rolling.h"
 #include "native_origin_owner.h"
 #include "vk_instance.h"
 #include "vk_scheduler.h"
@@ -9,6 +10,7 @@
 namespace Vulkan {
 std::string NativeAsyncSnapshot::Session()const {const char* p=std::getenv("BB_NR_NATIVE_ASYNC_SESSION");return p?p:"";}
 bool NativeAsyncSnapshot::Armed()const noexcept {
+ if(rolling)return rolling->Armed();
  return frontend&&frontend->Armed()&&(!BbNativeAsync::SceneFirst::Active()||
   (frontend->HelperStartRequested()&&peer&&peer_ready_observed));
 }
@@ -68,6 +70,7 @@ void NativeAsyncSnapshot::PollPeer(Scheduler& scheduler,bool supported){
  if(peer->State()==Phase::StopRequested||peer->State()==Phase::AwaitNativeRelease||peer->State()==Phase::Retired)stopping=true;
 }
 void NativeAsyncSnapshot::PollReady(const Instance& instance,Scheduler& scheduler,bool supported) {
+ if(Enabled()&&BbNativeAsync::Rolling::Enabled()){if(!rolling)rolling=std::make_shared<NativeAsyncRolling>();rolling->Poll(instance,scheduler,supported);return;}
  if(!Enabled())return;
  if(!frontend){frontend=std::make_unique<BbNativeAsync::Frontend>();std::printf("NATIVE_ASYNC_FRONTEND_READY session=%s scene_arm=REQUIRED availability_only=1 no_GPU_proof=1\n",Session().c_str());}
  if(BbNativeAsync::SceneFirst::Active()&&BbNativeAsync::ExitRequested()&&!peer){
@@ -131,6 +134,7 @@ std::optional<BbNativeAsync::Frame> NativeAsyncSnapshot::RecordedOrigin(const Sc
  return f;
 }
 vk::ImageView NativeAsyncSnapshot::RecordAdvanceAndApply(Scheduler& scheduler,uint64_t current_source) {
+ if(rolling)return rolling->Advance(scheduler,current_source);
  if(stopping||rejected||!retained||!chain.Size())return {};
  const auto& origin=chain.Origin();
  if(!chain.CompleteTo(origin.source,current_source,origin.epoch,origin.history))return {};
@@ -254,6 +258,7 @@ bool NativeAsyncSnapshot::FinalizeSparseLease(const NativeOriginIdentity& id,con
  lease->peer_read=false;pending_sparse.reset();sparse_input_proof.reset();sparse_final_proof.reset();return true;
 }
 void NativeAsyncSnapshot::DrainUnavailable(Scheduler& s) {
+ if(rolling){rolling->Drain(s);return;}
  if(!peer)return;
  auto job=peer->TryJob();
  if(job&&peer->State()==NativeOriginOwner::Phase::Complete){
@@ -262,6 +267,7 @@ void NativeAsyncSnapshot::DrainUnavailable(Scheduler& s) {
  }
 }
 void NativeAsyncSnapshot::MergeRecorded(Scheduler& scheduler,uint64_t source) {
+ if(rolling){rolling->Merge(scheduler,source);return;}
  if(!retained||chain.LastSource()!=source)return;
  TrackUse(scheduler);
  const auto tick=scheduler.CurrentTick();auto hold=retained;
@@ -274,6 +280,7 @@ void NativeAsyncSnapshot::MergeRecorded(Scheduler& scheduler,uint64_t source) {
 }
 void NativeAsyncSnapshot::RetireByTick(Scheduler& scheduler) {Shutdown(scheduler);}
 void NativeAsyncSnapshot::Shutdown(Scheduler& scheduler) {
+ if(rolling){rolling->Shutdown(scheduler);return;}
  stopping=true;
  if(BbNativeAsync::SceneFirst::Active()&&frontend)frontend->RequestStop();
  if(peer)peer->RequestStop(2);
@@ -287,6 +294,7 @@ void NativeAsyncSnapshot::Shutdown(Scheduler& scheduler) {
 }
 bool NativeAsyncSnapshot::TryCaptureOrigin(const Instance& instance,Scheduler& scheduler,
  const std::array<vk::Image,3>& source,const std::array<vk::ImageCreateInfo,3>& ci,BbNativeAsync::Frame meta) {
+ if(rolling)return rolling->Capture(instance,scheduler,source,ci,meta);
  if(!Enabled()||!Armed()||source_count>=120||stopping||rejected||!BbNativeAsync::Finite(meta))return false;
  // DEPTH-only GENERAL barriers on format130 require the actually enabled feature.
  if(!instance.IsSeparateDepthStencilLayoutsEnabled())return false;
@@ -368,4 +376,13 @@ bool NativeAsyncSnapshot::TryCaptureOrigin(const Instance& instance,Scheduler& s
   next.viewport[0],next.viewport[1],next.previous_viewport[0],next.previous_viewport[1],next.sr_jitter[0],next.sr_jitter[1],next.previous_sr_jitter[0],next.previous_sr_jitter[1]);
  return true;
 }
+}
+
+namespace Vulkan {
+bool NativeAsyncSnapshot::EffectSelected()const noexcept{return rolling?rolling->Effect():effect_selected;}
+unsigned NativeAsyncSnapshot::EffectJob()const noexcept{return rolling?rolling->Job():effect_job;}
+uint64_t NativeAsyncSnapshot::Epoch()const noexcept{return rolling?rolling->Epoch():last_epoch;}
+uint64_t NativeAsyncSnapshot::OriginSource()const noexcept{return rolling?rolling->Origin():(chain.Size()?chain.Origin().source:0);}
+void NativeAsyncSnapshot::RejectAssociation()noexcept{if(rolling){rolling->Quarantine();return;}rejected=true;}
+void NativeAsyncSnapshot::Quarantine()noexcept{if(rolling){rolling->Quarantine();return;}rejected=true;stopping=true;if(retained)for(const auto&p:retained->leases)if(p)p->unknown=true;}
 }

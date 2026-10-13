@@ -10,7 +10,7 @@
 #include "video_core/texture_cache/image.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 namespace Vulkan {
-class Instance;class Scheduler;class NativeOriginOwner;
+class Instance;class Scheduler;class NativeOriginOwner;class NativeAsyncRolling;
 class NativeAsyncSnapshot {
 public:
  bool Enabled()const noexcept{return BbNativeAsync::OptIn();}
@@ -18,8 +18,8 @@ public:
              const std::array<vk::ImageCreateInfo,3>&,BbNativeAsync::Frame);
  void PollReady(const Instance&,Scheduler&,bool supported);
  bool Armed()const noexcept;
- bool EffectSelected()const noexcept{return effect_selected;}
- unsigned EffectJob()const noexcept{return effect_job;}
+ bool EffectSelected()const noexcept;
+ unsigned EffectJob()const noexcept;
  vk::ImageView RecordAdvanceAndApply(Scheduler&,uint64_t current_source);
  bool TryRecordSparseInput(Scheduler&,const NativeOriginResources&,const NativeOriginIdentity&,
                            const std::shared_ptr<NativeOriginGpuProof>&);
@@ -39,12 +39,13 @@ public:
  // Recorded producer ordering, not CPU copyReady or permission to publish INPUT.
  std::optional<BbNativeAsync::Frame> RecordedOrigin(const Scheduler&)const noexcept;
  void Shutdown(Scheduler&);
- void RejectAssociation()noexcept{rejected=true;}
- void Quarantine()noexcept{rejected=true;stopping=true;if(retained)for(const auto& p:retained->leases)if(p)p->unknown=true;}
+ void RejectAssociation()noexcept;
+ void Quarantine()noexcept;
  std::string Session()const;
- uint64_t Epoch()const noexcept{return last_epoch;}
- uint64_t OriginSource()const noexcept{return chain.Size()?chain.Origin().source:0;}
+ uint64_t Epoch()const noexcept;
+ uint64_t OriginSource()const noexcept;
 private:
+ std::shared_ptr<NativeAsyncRolling>rolling;
  struct Retention {
   std::array<VideoCore::UniqueImage,3*BbNativeAsync::NodeCount> images;
   std::array<std::shared_ptr<BbNativeAsync::Node>,BbNativeAsync::NodeCount> records{};
