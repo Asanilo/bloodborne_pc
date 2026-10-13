@@ -67,7 +67,11 @@ void NativeAsyncRolling::Poll(const Instance&i,Scheduler&s,bool supported){
  const bool exiting=BbNativeAsync::ExitRequested();if(exiting)frontend->RequestStop();
  if(!peer&&exiting){if(frontend->Finished())frontend->JoinFinished();
   const BbNativeAsync::SceneFirst::NoPeerExitProof proof{.no_peer=true,.no_retained=!retained,.no_snapshot_owner=true,.no_pending=!pending,.frontend_joined=frontend->Joined(),.unknown=unknown,.peer_creation_attempted=peer_attempted,.snapshot_creation_attempted=created,.copies_ever=copies,.maximum_native_use_tick=max_tick};
-  if(BbNativeAsync::SceneFirst::CanExitWithoutPeer(proof))BbNativeAsync::PublishExitComplete();return;
+  if(BbNativeAsync::SceneFirst::CanExitWithoutPeer(proof)&&!BbNativeAsync::ExitComplete()){
+   std::printf("NATIVE_ASYNC_EXIT_NO_PEER session=%s actual_no_owner=1 actual_no_snapshot=1 actual_no_pending=1 maximum_native_use_tick=0 preparation_joined=1 no_peer_created=1 no_NR_claim=1 scope=native_async_only rolling=1\n",Session().c_str());
+   BbNativeAsync::PublishExitComplete();
+  }
+  return;
  }
  if(!peer&&supported&&frontend->HelperStartRequested()&&!exiting){peer_attempted=true;peer=std::make_shared<NativeOriginOwner>();peer->Start(i);}
  if(!peer)return;using Phase=NativeOriginOwner::Phase;

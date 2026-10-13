@@ -51,3 +51,8 @@ origin/job/age/history and actual merge/Present; defaulthot0readback.
 
 BUILD_ONLY and CPU state/slot tests are not runtime/VRAM/coverage/quality acceptance.
 Counter direction already actual no-gain/0 proof events; no repeatedGPU here.
+
+No-peer exit emits the legacy-compatible NATIVE_ASYNC_EXIT_NO_PEER event only
+after managed preparation has joined and the actual no-owner/no-snapshot/no-
+pending/no-created-peer/zero-native-use proof passes. ExitComplete suppresses
+duplicate events; rolling=1 is annotation only, not N0 or generic-exit proof.
