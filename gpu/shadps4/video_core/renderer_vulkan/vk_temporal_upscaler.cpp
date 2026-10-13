@@ -347,6 +347,7 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
 }
 
 TemporalUpscaler::~TemporalUpscaler() {
+    native_pre_sr.Shutdown(scheduler);
     native_async_snapshot.RetireByTick(scheduler);
     p0_controller.Shutdown(instance, scheduler);
     if (resources_ready) scheduler.Finish();
@@ -437,6 +438,7 @@ bool TemporalUpscaler::RasterScaling() const {
 bool TemporalUpscaler::OnFrameStart() {
     const auto& p0_settings=BbSettings::Get();
     native_async_snapshot.PollReady(instance,scheduler,!Scaled()&&UseDlss()&&p0_settings.preset==1&&p0_settings.jitter);
+    native_pre_sr.Poll(instance,scheduler,!Scaled()&&UseDlss()&&p0_settings.preset==1&&p0_settings.jitter);
     p0_controller.Tick(instance,scheduler,!Scaled()&&UseDlss()&&p0_settings.preset==1&&p0_settings.jitter,BbOverlay::MenuOpen());
     // bbport: BB_PRESET_FILE=<file> holding a preset number, read about once a second: switches
     // the preset like the menu does (scripted tests of live preset changes).
@@ -610,7 +612,7 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     output_view.reset();
     motion_image = VideoCore::UniqueImage(device, allocator);
     auto motion_usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled;
-    if (C0CaptureEnabled() || Q0CaptureEnabled() || Q1DiagnosticEnabled() || P0Enabled() || BbNativeAsync::OptIn()) {
+    if (C0CaptureEnabled() || Q0CaptureEnabled() || Q1DiagnosticEnabled() || P0Enabled() || BbNativeAsync::OptIn() || BbPreSr::Enabled()) {
         motion_usage |= vk::ImageUsageFlagBits::eTransferSrc;
     }
     motion_image.Create(vk::ImageCreateInfo{
@@ -1337,11 +1339,16 @@ void TemporalUpscaler::Run() {
             RecordFsr4Reactive(cmdbuf, input_color_view, w, h, ow, oh);
         }
     } else if (UseDlss()) {
+        if(native_pre_sr.Enabled())crumb.reset();
         dispatched = RecordDlss(
             cmdbuf,
             {input_color, input_color_view, color.info.pixel_format, vk::ImageAspectFlagBits::eColor, w, h},
             {input_depth, input_depth_view, depth_format, vk::ImageAspectFlagBits::eDepth, w, h}, w, h,
             ow, oh, frame_ms, true);
+        if(native_pre_sr.Enabled()){
+            cmdbuf=scheduler.CommandBuffer();
+            crumb.emplace(cmdbuf,scheduler.CrumbStream(),"TAA pre-SR NR then native SR");
+        }
     } else {
         FfxVkPortableUpscaleDispatchInfo info{};
         info.structSize = sizeof(info);
@@ -2000,6 +2007,16 @@ void TemporalUpscaler::Run() {
         if (c4_frame_processed) c4_game_bridge.EndMergeTiming(scheduler);
         if (q1_frame_processed) q1_game_bridge.EndMergeTiming(scheduler);
         if (p0_frame_processed) p0_controller.EndMergeTiming(scheduler);
+        if(native_pre_sr.Enabled()&&native_pre_sr.CurrentAttempt(source_game_frame)){
+            std::scoped_lock lock{c1_audit_mutex};
+            if(native_pre_sr_pending_audit)throw std::runtime_error("preSR cannot overwrite pending current-source ledger");
+            native_pre_sr_pending_audit=C1PresentAudit{.stage="PRE_SR",.mode=native_pre_sr.CurrentSelected(source_game_frame)?"NR-before-SR":"original-SR-fallback",
+                .session=native_pre_sr.Session(),.execution_mode="hot",.selected_output=native_pre_sr.CurrentSelected(source_game_frame),
+                .audit_full=false,.nr_frame=unsigned(native_pre_sr.CurrentJob()),.source_game_frame=source_game_frame,.merge_tick=scheduler.CurrentTick()};
+            std::printf("NATIVE_PRE_SR_MERGE_RECORDED session=%s source_game_frame=%llu job=%llu selected_NR720=%u merge_tick=%llu SR_display=1920x1080 original_scene_alpha_preserved=1\n",
+                native_pre_sr.Session().c_str(),(unsigned long long)source_game_frame,
+                (unsigned long long)native_pre_sr.CurrentJob(),native_pre_sr.CurrentSelected(source_game_frame),(unsigned long long)scheduler.CurrentTick());
+        }
         if(native_async_current) {
             if(native_sky_selected) native_async_snapshot.MergeRecorded(scheduler,source_game_frame);
             std::scoped_lock lock{c1_audit_mutex};
@@ -2961,6 +2978,19 @@ bool TemporalUpscaler::TakeC1PresentAudit(VAddr address, u64 present_frame_count
                                           u64 gpu_frame_at_prepare, u64 prepare_tick,
                                           C1PresentAudit& audit) {
     std::scoped_lock lock{c1_audit_mutex};
+    if(native_pre_sr_pending_audit){
+        const auto& pending=*native_pre_sr_pending_audit;
+        if(gpu_frame_at_prepare!=pending.source_game_frame+1||prepare_tick<pending.merge_tick){
+            std::fprintf(stderr,"NATIVE_PRE_SR_PRESENT_ASSOCIATION_REJECTED source=%llu actual_prepare_frame=%llu counted_valid=0\n",
+                (unsigned long long)pending.source_game_frame,(unsigned long long)gpu_frame_at_prepare);
+            native_pre_sr.RejectAssociation();native_pre_sr_pending_audit.reset();audit={};return false;
+        }
+        audit=pending;audit.buffer_address=address;audit.buffer_prepare_gpu_frame=gpu_frame_at_prepare;audit.buffer_prepare_tick=prepare_tick;audit.present_frame_counter_before=present_frame_counter_before;
+        std::printf("NATIVE_PRE_SR_PRESENT_BIND session=%s source_game_frame=%llu job=%u merge_tick=%llu gpu_frame_at_prepare=%llu guest_buffer_address=0x%llx prepare_tick=%llu association=next_nonupscaled_videoout_prepare_after_merge\n",
+            audit.session.c_str(),(unsigned long long)audit.source_game_frame,audit.nr_frame,(unsigned long long)audit.merge_tick,
+            (unsigned long long)gpu_frame_at_prepare,(unsigned long long)address,(unsigned long long)prepare_tick);
+        native_pre_sr_pending_audit.reset();return true;
+    }
     if(native_async_pending_audit) {
         const auto& pending=*native_async_pending_audit;
         if(gpu_frame_at_prepare!=pending.source_game_frame+1||prepare_tick<pending.merge_tick) {
@@ -3270,6 +3300,33 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
         last_dlss_jitter_x = sign * jitter[0];
         last_dlss_jitter_y = sign * jitter[1];
         last_dlss_frame_ms = frame_ms;
+        Dlss::Resource sr_color=color;
+        const u64 pre_source=BbStats::gpu_frames.load(std::memory_order_relaxed);
+        const bool pre_requested_reset=reset;
+        if(native_pre_sr.Enabled()){
+            const auto cc=scene_targets.CaptureCreateInfo(color.image);
+            const auto dc=scene_targets.CaptureCreateInfo(depth.image);
+            bool pending=false;{std::scoped_lock lock{c1_audit_mutex};pending=native_pre_sr_pending_audit.has_value();}
+            const bool profile=hdr&&!Scaled()&&w==1280&&h==720&&ow==1920&&oh==1080&&
+                BbSettings::Get().preset==1&&BbSettings::Get().jitter&&cc&&dc&&!pending;
+            vk::ImageView edited{};
+            if(profile)edited=native_pre_sr.TryCurrent(instance,scheduler,
+                {color.image,depth.image,vk::Image(motion_image)},{*cc,*dc,motion_image.image_ci},
+                {.source=pre_source,.sr_reset=pre_requested_reset,
+                 .viewport=camera_motion.CurrentJitter(),.previous_viewport=camera_motion.PreviousJitter(),
+                 .sr_jitter={sign*jitter[0],sign*jitter[1]},
+                 .previous_sr_jitter={previous_dlss_jitter_x,previous_dlss_jitter_y}});
+            cmdbuf=scheduler.CommandBuffer();
+            if(edited&&!native_pre_sr.ConfirmBeforeSr(pre_source))edited=vk::ImageView{};
+            const bool nr=bool(edited);
+            if(nr)sr_color={native_pre_sr.ReturnImage(),edited,vk::Format::eR16G16B16A16Sfloat,
+                           vk::ImageAspectFlagBits::eColor,w,h};
+            const bool domain_changed=native_pre_sr.ChangeInputDomain(nr);
+            reset=BbPreSr::InputDomain::AppliedReset(pre_requested_reset,domain_changed);last_dlss_reset=reset;
+            std::printf("NATIVE_PRE_SR_INPUT_DOMAIN session=%s source=%llu source_sr_reset_requested=%u input_domain=%s input_domain_changed=%u applied_sr_reset=%u NR_reset=1 NR_reset_does_not_force_SR_reset=1 original_jitter=%.9g,%.9g\n",
+                native_pre_sr.Session().c_str(),(unsigned long long)pre_source,pre_requested_reset,
+                nr?"NR":"raw",domain_changed,reset,sign*jitter[0],sign*jitter[1]);
+        }
         // Only the normal opt-in Quality HDR route. Feature creation above, motion
         // generation, sharpening, NR, merge and Present are outside this interval.
         const u64 sr_timing_source=BbStats::gpu_frames.load(std::memory_order_relaxed);
@@ -3279,7 +3336,7 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
             sr_timing_slot=p0_sr_timing->Begin(cmdbuf,sr_timing_source);
         }
         ok = dlss->Evaluate(cmdbuf, {
-            .color = color,
+            .color = sr_color,
             .depth = depth,
             .motion = {vk::Image(motion_image), *motion_view, vk::Format::eR16G16Sfloat,
                        vk::ImageAspectFlagBits::eColor, w, h},
@@ -3292,6 +3349,7 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
             .sharpness = settings.sharpen ? std::min(settings.sharpness.load(), 1.0f) : 0.0f,
         });
         if (sr_timing_slot) p0_sr_timing->End(cmdbuf,scheduler,*sr_timing_slot,sr_timing_source,ok);
+        native_pre_sr.SrReadRecorded(scheduler,pre_source,ok);
     }
     if (ok) {
         const u64 source_frame = BbStats::gpu_frames.load(std::memory_order_relaxed);

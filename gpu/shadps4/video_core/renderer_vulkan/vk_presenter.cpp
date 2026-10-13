@@ -846,6 +846,12 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         if (is_game_frame && !is_reusing_frame && std::getenv("BB_NR_C4_BASELINE"))
             std::printf("C4_SR_PRESENT mode=srOnly actual_game_frame=1 reused=0 cpu_monotonic_ns=%lld present_frame_number=%llu swapchain_present=%u helper_started=0 IPC=0\n",
                 (long long)c4_now_ns, (unsigned long long)BbStats::frame_number.load(), presented);
+        if(is_game_frame&&!is_reusing_frame&&frame->audit_stage=="PRE_SR"&&frame->c1_source_game_frame)
+            std::printf("NATIVE_PRE_SR_CURRENT_PRESENT session=%s source_game_frame=%llu job=%u selected_NR720=%u present_frame_number=%llu merge_tick=%llu prepare_tick=%llu ready_tick=%llu swapchain_present=%u cpu_monotonic_ns=%lld route=original720_NR720_nativeSR1080 phase=UNVERIFIED\n",
+                frame->audit_session.c_str(),(unsigned long long)frame->c1_source_game_frame,frame->audit_nr_frame,
+                frame->audit_selected_output,(unsigned long long)frame->c1_present_frame_number,
+                (unsigned long long)frame->c1_merge_tick,(unsigned long long)frame->c1_guest_prepare_tick,
+                (unsigned long long)frame->ready_tick,presented,(long long)c4_now_ns);
         if(is_game_frame&&!is_reusing_frame&&frame->audit_stage=="NATIVE_ASYNC"&&frame->c1_source_game_frame)
             std::printf("NATIVE_ASYNC_CURRENT_PRESENT session=%s snapshot_scope=%s source_game_frame=%llu present_frame_number=%llu merge_tick=%llu prepare_tick=%llu ready_tick=%llu swapchain_present=%u cpu_monotonic_ns=%lld current_SR=1 cache_selected=%u effect_applied=%u sparse_job=%u source_edited=0 current_NR_inference_claim=0\n",
                 frame->audit_session.c_str(),frame->audit_mode.c_str(),(unsigned long long)frame->c1_source_game_frame,

@@ -5,6 +5,7 @@
 #include "bbport_overlay.h"
 #include "video_core/renderer_vulkan/p0_status.h"
 #include "video_core/renderer_vulkan/native_async_state.h"
+#include "video_core/renderer_vulkan/native_pre_sr_policy.h"
 #include "bbport_settings.h"
 #include "bbport_copy.h"
 #include <sys/resource.h>
@@ -286,7 +287,7 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
             SDL_Delay(2);
         }
         LOG_INFO(Frontend, "Window closed by user");
-        if(BbNativeAsync::OptIn()) {
+        if(BbNativeAsync::OptIn()||BbPreSr::Enabled()) {
             BbNativeAsync::RequestExit();
             const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
             while(!BbNativeAsync::ExitComplete()&&std::chrono::steady_clock::now()<deadline)SDL_Delay(2);

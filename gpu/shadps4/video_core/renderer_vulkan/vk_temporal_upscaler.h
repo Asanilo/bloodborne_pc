@@ -33,6 +33,7 @@
 #include "video_core/renderer_vulkan/q1_game_bridge.h"
 #include "video_core/renderer_vulkan/p0_controller.h"
 #include "video_core/renderer_vulkan/native_async_snapshot.h"
+#include "video_core/renderer_vulkan/native_pre_sr_bridge.h"
 #include "video_core/renderer_vulkan/p0_sr_timing.h"
 #include "video_core/renderer_vulkan/vk_dlss.h"
 #include "video_core/renderer_vulkan/vk_fsr4.h"
@@ -279,6 +280,8 @@ private:
     std::optional<C1PresentAudit> c3_pending_audit;
     P0Controller p0_controller;
     NativeAsyncSnapshot native_async_snapshot;
+    NativePreSrBridge native_pre_sr;
+    std::optional<C1PresentAudit> native_pre_sr_pending_audit;
     std::optional<C1PresentAudit> native_async_pending_audit;
     std::optional<C1PresentAudit> p0_pending_audit;
     Q1NrProcess q1_nr_process;

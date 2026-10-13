@@ -1,0 +1,41 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#pragma once
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <initializer_list>
+#include <array>
+namespace BbPreSr {
+inline bool Enabled()noexcept {
+ const char*p=std::getenv("BB_NR_NATIVE_PRE_SR");if(!p||std::strcmp(p,"1"))return false;
+ for(const char*k:{"BB_NR_NATIVE_ASYNC","BB_NR_P0_MODE","BB_NR_Q1_MODE","BB_NR_C4_MODE","BB_NR_C3_MODE","BB_NR_C2_MODE","BB_NR_C1_MODE"}){
+  const char*v=std::getenv(k);if(v&&v[0]&&std::strcmp(v,"0"))return false;
+ }
+ return true;
+}
+struct SourceCI {
+ uint32_t format=0,width=0,height=0,depth=0,samples=0,mips=0,layers=0;bool transfer_src=false;
+};
+inline bool SourcesSupported(const std::array<SourceCI,3>&actual)noexcept {
+ constexpr uint32_t formats[]{97,130,83};
+ for(unsigned k=0;k<3;k++){const auto&c=actual[k];if(c.format!=formats[k]||c.width!=1280||c.height!=720||
+  c.depth!=1||c.samples!=1||c.mips!=1||c.layers!=1||!c.transfer_src)return false;}
+ return true;
+}
+// Same-current input only. This route cannot use a late previous-frame NR image.
+struct SourceIdentity {
+ uint64_t source=0,epoch=0,history=0,params=1;
+ bool original720=true,hdr=true,source_edited=false;
+ bool Valid()const noexcept{return source&&epoch&&history&&params==1&&original720&&hdr&&!source_edited;}
+ bool Exact(const SourceIdentity&x)const noexcept{return Valid()&&x.Valid()&&source==x.source&&epoch==x.epoch&&history==x.history&&params==x.params;}
+};
+struct InputDomain {
+ bool nr=false;
+ bool Change(bool next)noexcept{const bool changed=next!=nr;nr=next;return changed;}
+ static bool AppliedReset(bool original,bool domain_changed)noexcept{return original||domain_changed;}
+};
+inline bool CanGrant(const SourceIdentity&current,const SourceIdentity&result,bool real_model,
+ bool real_GPU,bool local_return_GPU,bool half_guard_clear)noexcept {
+ return current.Exact(result)&&real_model&&real_GPU&&local_return_GPU&&half_guard_clear;
+}
+}

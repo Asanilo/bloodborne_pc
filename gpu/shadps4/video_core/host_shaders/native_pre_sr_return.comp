@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0) uniform sampler2D nr720;
+layout(binding=1,rgba16ui) readonly uniform uimage2D original720bits;
+layout(binding=2,rgba16ui) writeonly uniform uimage2D returned720bits;
+layout(binding=3,std430) buffer Guard {uint flag;} guard;
+void main(){ivec2 q=ivec2(gl_GlobalInvocationID.xy);if(any(greaterThanEqual(q,imageSize(returned720bits))))return;
+ vec4 v=texelFetch(nr720,q,0);uvec4 original=imageLoad(original720bits,q);
+ float originalAlpha=unpackHalf2x16(original.a).x;
+ if(any(isnan(v))||any(isinf(v))||any(greaterThan(abs(v),vec4(65504.0)))||
+    floatBitsToUint(v.a)!=floatBitsToUint(originalAlpha)){atomicOr(guard.flag,1u);return;}
+ uint rg=packHalf2x16(v.rg),ba=packHalf2x16(v.ba);
+ // Raw uint16 alpha, including signed zero/subnormals, is never float-roundtripped.
+ imageStore(returned720bits,q,uvec4(rg&0xffffu,rg>>16,ba&0xffffu,original.a));
+}

@@ -2,6 +2,7 @@
 #include "video_core/renderer_vulkan/q1_nr_process.h"
 #include "video_core/renderer_vulkan/p0_nr_process.h"
 #include "video_core/renderer_vulkan/native_async_state.h"
+#include "video_core/renderer_vulkan/native_pre_sr_policy.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -416,6 +417,8 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
         // Q1 copies only the actual depth proxy; do not broaden the unused 720 color source.
         if ((Q1DiagnosticEnabled() || P0Enabled() || BbNativeAsync::OptIn()) && ci.format==vk::Format::eD32SfloatS8Uint)
             ci.usage |= vk::ImageUsageFlagBits::eTransferSrc;
+        if(BbPreSr::Enabled()&&(ci.format==vk::Format::eR16G16B16A16Sfloat||ci.format==vk::Format::eD32SfloatS8Uint))
+            ci.usage|=vk::ImageUsageFlagBits::eTransferSrc;
         entry->image.Create(ci);
         tracked.insert(original.image_uid);
     }
