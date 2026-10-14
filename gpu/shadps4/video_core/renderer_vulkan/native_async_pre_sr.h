@@ -5,6 +5,7 @@
 #include "native_async_pre_sr_return.h"
 #include "native_async_pre_sr_fixed_input.h"
 #include "native_async_pre_sr_sr_policy.h"
+#include "native_pre_sr_acquisition_state.h"
 #include "native_async_pre_sr_diagnostic.h"
 #include "native_origin_lease.h"
 #include "native_async_pre_sr_sky.h"
@@ -59,7 +60,7 @@ public:
  void Quarantine()noexcept{rejected=true;stopping=true;if(fixed_input)fixed_input->HoldUnknown();if(retained)for(const auto& p:retained->leases)if(p)p->native.unknown=true;}
  std::string Session()const;
  uint64_t Epoch()const noexcept{return last_epoch;}
- uint64_t OriginSource()const noexcept{return chain.Size()?chain.Origin().source:0;}
+ uint64_t OriginSource()const noexcept{return BbNativePreSrAcquisition::Enabled()?(acquisition.active?acquisition.active_origin.source:0):(chain.Size()?chain.Origin().source:0);}
 private:
  struct Retention {
   std::array<VideoCore::UniqueImage,3*BbNativeAsync::NodeCount> images;
@@ -68,15 +69,24 @@ private:
   std::unique_ptr<NativeAsyncPreSrSky> sky;
  std::unique_ptr<NativeAsyncPreSrReturn> returns;
   std::shared_ptr<NativeAsyncPreSrOriginQuiescence> quiescence;
+  std::shared_ptr<BbNativeAsyncPreSr::SourceLease> bank_lease;
+
   ~Retention(){
    if(quiescence){uint64_t actual=0;for(const auto& lease:leases)if(lease)actual=std::max(actual,lease->native.observed.load(std::memory_order_acquire));
     auto old=quiescence->observed_tick.load();while(old<actual&&!quiescence->observed_tick.compare_exchange_weak(old,actual)){}
    }
    returns.reset();sky.reset();for(auto& x:images)x=VideoCore::UniqueImage{};
    if(quiescence)quiescence->stopped_and_destroyed.store(true,std::memory_order_release);}
-  bool AllUsesReady()const noexcept {for(const auto& p:leases)if(p&&!p->CanReuse())return false;return true;}
+  bool AllUsesReady()const noexcept {if(bank_lease&&bank_lease->LastUse()&&!bank_lease->CanReuse())return false;for(const auto& p:leases)if(p&&!p->CanReuse())return false;return true;}
 
  };
+ BbNativePreSrAcquisition::State acquisition;
+ bool CaptureAcquisition(Scheduler&,const std::array<vk::Image,3>&,BbNativeAsync::Frame);
+ vk::ImageView AdvanceAcquisition(Scheduler&,uint64_t);
+ unsigned CurrentPacket()const noexcept{return BbNativePreSrAcquisition::Enabled()?acquisition.current:chain.Size()-1;}
+ unsigned PendingPacket()const noexcept{return BbNativePreSrAcquisition::Enabled()?acquisition.pending_slots[0]:0;}
+ const BbNativeAsync::Frame& SparseOrigin()const noexcept{return retained->records[PendingPacket()]->frame;}
+ void BankUse(Scheduler&);
  void Create(const Instance&);
  void TrackUse(Scheduler&);
  void PollPeer(Scheduler&,bool supported);

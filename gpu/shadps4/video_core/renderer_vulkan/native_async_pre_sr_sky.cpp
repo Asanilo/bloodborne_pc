@@ -67,11 +67,21 @@ void NativeAsyncPreSrSky::Pass(vk::CommandBuffer cmd,Packet& p,unsigned slot,con
 }
 vk::ImageView NativeAsyncPreSrSky::Record(Scheduler& scheduler,unsigned index,const std::array<vk::Image,3>& source,bool capture,const BbNativeAsync::Frame& frame){
  if(index!=next_index||index>=packets.size()||capture!=(index==0))throw std::runtime_error("Native Sky actual consecutive lineage required");
+ RecordSourceConversionOnly(scheduler,index,source,frame);
+ return RecordEditHistory(scheduler,index,capture);
+}
+void NativeAsyncPreSrSky::RecordSourceConversionOnly(Scheduler& scheduler,unsigned index,const std::array<vk::Image,3>& source,const BbNativeAsync::Frame& frame){
+ if(index!=next_conversion_index||index>=packets.size())throw std::runtime_error("Native Sky conversion packet order/duplicate rejected");
  auto cmd=scheduler.CommandBuffer();if(!initialized)InitImages(cmd);auto& p=packets[index];p.frame=frame;
  for(unsigned k=0;k<3;k++){p.source_views[k]=device.createImageViewUnique({.image=source[k],.viewType=vk::ImageViewType::e2D,.format=k==0?vk::Format::eR16G16B16A16Sfloat:k==1?vk::Format::eD32SfloatS8Uint:vk::Format::eR16G16Sfloat,.subresourceRange={k==1?vk::ImageAspectFlagBits::eDepth:vk::ImageAspectFlagBits::eColor,0,1,0,1}}).value;}
  std::array<vk::DescriptorImageInfo,6> ci{};std::array<vk::WriteDescriptorSet,6> cw{};
  for(unsigned k=0;k<6;k++){ci[k]={.sampler=k<3?*nearest:vk::Sampler{},.imageView=k<3?*p.source_views[k]:*p.converted[k-3].view,.imageLayout=vk::ImageLayout::eGeneral};cw[k]={.dstSet=p.conversion,.dstBinding=k,.descriptorCount=1,.descriptorType=k<3?vk::DescriptorType::eCombinedImageSampler:vk::DescriptorType::eStorageImage,.pImageInfo=&ci[k]};}
  Barrier(cmd);device.updateDescriptorSets(cw,{});cmd.bindPipeline(vk::PipelineBindPoint::eCompute,*conversion_pipeline);cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,*conversion_pipeline_layout,0,p.conversion,{});cmd.dispatch(160,90,1);Barrier(cmd);
+ next_conversion_index++;
+}
+vk::ImageView NativeAsyncPreSrSky::RecordEditHistory(Scheduler& scheduler,unsigned index,bool capture){
+ if(index!=next_index||index>=next_conversion_index||index>=packets.size()||capture!=(index==0))throw std::runtime_error("Native Sky edit requires exact recorded packet order");
+ auto cmd=scheduler.CommandBuffer();auto& p=packets[index];const auto& frame=p.frame;
  auto& prev=banks[index%2];auto& next=banks[(index+1)%2];auto& color=p.converted[0];auto& depth=p.converted[1];auto& mv=p.converted[2];
  // Controlled noop origin: edited source is exactly the same converted immutable SR.
  std::array<Image*,12> reads{&prev.edit,&prev.guide,&color,&depth,&mv,&color,&dummy,&dummy,&dummy,&dummy,&exposure,&dummy};
@@ -101,5 +111,46 @@ vk::ImageView NativeAsyncPreSrSky::RecordSparseCatchup(Scheduler& s,unsigned cur
  }
  return *replay_packets[current].output.view;
 }
+
+void NativeAsyncPreSrSky::RecordAcquisitionConversion(Scheduler& scheduler,unsigned index,const std::array<vk::Image,3>& source,const BbNativeAsync::Frame& frame){
+ if(index>=packets.size()||!BbNativeAsync::Finite(frame)||frame.source<=acquisition_sources[index])throw std::runtime_error("C conversion physical packet/source mismatch");
+ auto cmd=scheduler.CommandBuffer();if(!initialized)InitImages(cmd);auto& p=packets[index];p.frame=frame;
+ for(unsigned k=0;k<3;k++){p.source_views[k]=device.createImageViewUnique({.image=source[k],.viewType=vk::ImageViewType::e2D,.format=k==0?vk::Format::eR16G16B16A16Sfloat:k==1?vk::Format::eD32SfloatS8Uint:vk::Format::eR16G16Sfloat,.subresourceRange={k==1?vk::ImageAspectFlagBits::eDepth:vk::ImageAspectFlagBits::eColor,0,1,0,1}}).value;}
+ std::array<vk::DescriptorImageInfo,6> ci{};std::array<vk::WriteDescriptorSet,6> cw{};
+ for(unsigned k=0;k<6;k++){ci[k]={.sampler=k<3?*nearest:vk::Sampler{},.imageView=k<3?*p.source_views[k]:*p.converted[k-3].view,.imageLayout=vk::ImageLayout::eGeneral};cw[k]={.dstSet=p.conversion,.dstBinding=k,.descriptorCount=1,.descriptorType=k<3?vk::DescriptorType::eCombinedImageSampler:vk::DescriptorType::eStorageImage,.pImageInfo=&ci[k]};}
+ Barrier(cmd);device.updateDescriptorSets(cw,{});cmd.bindPipeline(vk::PipelineBindPoint::eCompute,*conversion_pipeline);cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,*conversion_pipeline_layout,0,p.conversion,{});cmd.dispatch(160,90,1);Barrier(cmd);
+ acquisition_sources[index]=frame.source;
+}
+void NativeAsyncPreSrSky::AcquisitionStep(vk::CommandBuffer cmd,Packet& p,Packet& src,unsigned prev_index,unsigned next_index,bool capture,vk::ImageView NR,bool apply){
+ auto& prev=banks[prev_index];auto& next=banks[next_index];Image edited;edited.borrowed=NR;
+ auto& color=src.converted[0];auto& depth=src.converted[1];auto& mv=src.converted[2];
+ const auto& f=src.frame;
+ std::array<Image*,12> reads{&prev.edit,&prev.guide,&color,&depth,&mv,capture?&edited:&color,&dummy,&dummy,&dummy,&dummy,&exposure,&dummy};
+ auto c=Base(capture?2:1);c.HistoryValid=capture?0:1;c.JitterDeltaX=(f.previous_viewport[0]-f.viewport[0])/1280.f;c.JitterDeltaY=(f.previous_viewport[1]-f.viewport[1])/720.f;
+ Barrier(cmd);Pass(cmd,p,0,c,true,reads,{&next.edit,&next.guide,&p.output,&next.levels[0],&next.l1guide,&stats,&dummy});
+ for(unsigned j=1;j<3;j++){auto d=Base(3);d.Width=next.levels[j].image.image_ci.extent.width;d.Height=next.levels[j].image.image_ci.extent.height;d.SourceWidth=next.levels[j-1].image.image_ci.extent.width;d.SourceHeight=next.levels[j-1].image.image_ci.extent.height;reads[5]=&next.levels[j-1];Pass(cmd,p,j,d,true,reads,{&next.levels[j],&dummy,&p.output,&dummy,&dummy,&stats,&dummy});}
+ if(apply){reads={&next.edit,&next.guide,&color,&depth,&mv,&next.levels[0],&next.l1guide,&next.levels[1],&next.levels[2],&dummy,&exposure,&dummy};Pass(cmd,p,3,Base(4),true,reads,{&p.output,&dummy,&dummy,&dummy,&dummy,&stats,&dummy});}
+}
+vk::ImageView NativeAsyncPreSrSky::RecordAcquisitionAdvance(Scheduler& scheduler,unsigned slot){
+ if(slot>=packets.size()||!acquisition_history)return {};
+ auto& p=packets[slot];const auto& f=p.frame;
+ if(acquisition_sources[slot]!=f.source||f.source!=acquisition_previous.source+1||f.previous!=acquisition_previous.source||f.sr_reset||f.epoch!=acquisition_previous.epoch||f.history!=acquisition_previous.history||f.params!=acquisition_previous.params)return {};
+ const unsigned next=1-acquisition_bank;AcquisitionStep(scheduler.CommandBuffer(),p,p,acquisition_bank,next,false,{},true);
+ acquisition_bank=next;acquisition_previous=f;return p.output.View();
+}
+vk::ImageView NativeAsyncPreSrSky::RecordAcquisitionCatchup(Scheduler& scheduler,std::span<const unsigned> suffix,vk::ImageView nr){
+ if(!nr||suffix.empty()||suffix.size()>BbNativeAsync::NodeCount)return {};
+ for(unsigned i=0;i<suffix.size();++i){const auto slot=suffix[i];if(slot>=packets.size()||acquisition_sources[slot]!=packets[slot].frame.source)return {};
+  if(i){const auto& p=packets[suffix[i-1]].frame;const auto& f=packets[slot].frame;if(f.source!=p.source+1||f.previous!=p.source||f.sr_reset||f.epoch!=p.epoch||f.history!=p.history||f.params!=p.params)return {};}
+ }
+ if(replay_busy.exchange(true,std::memory_order_acq_rel))return {};
+ auto cmd=scheduler.CommandBuffer();unsigned bank=0;
+ for(unsigned i=0;i<suffix.size();++i){const unsigned slot=suffix[i],next=1-bank;
+  AcquisitionStep(cmd,replay_packets[slot],packets[slot],bank,next,i==0,nr,i+1==suffix.size());bank=next;
+ }
+ acquisition_bank=bank;acquisition_previous=packets[suffix.back()].frame;acquisition_history=true;
+ return replay_packets[suffix.back()].output.View();
+}
+
 uint64_t NativeAsyncPreSrSky::ImageBytes()const noexcept{uint64_t n=0;const auto add=[&](const Image& x){const auto& c=x.image.image_ci;n+=uint64_t(c.extent.width)*c.extent.height*(c.format==vk::Format::eR32G32B32A32Sfloat?16:c.format==vk::Format::eR32G32Sfloat?8:4);};for(const auto& b:banks){add(b.edit);add(b.guide);add(b.l1guide);for(const auto& l:b.levels)add(l);}for(const auto& p:packets){for(const auto& x:p.converted)add(x);add(p.output);}for(const auto& p:replay_packets)add(p.output);add(dummy);add(exposure);add(stats);return n;}
 }

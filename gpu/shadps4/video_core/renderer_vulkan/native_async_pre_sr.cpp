@@ -31,6 +31,7 @@ void NativeAsyncPreSr::Create(const Instance& instance) {
    .initialLayout=vk::ImageLayout::eUndefined});
  }
  next->sky=std::make_unique<NativeAsyncPreSrSky>(instance);
+ if(BbNativePreSrAcquisition::Enabled())next->bank_lease=std::make_shared<BbNativeAsyncPreSr::SourceLease>();
  next->returns=std::make_unique<NativeAsyncPreSrReturn>(instance);
  std::printf("NATIVE_PRE_SR_GPU_RESOURCES raw_packed_bytes=92160000 sky_packed_bytes=%llu returns_packed_bytes=36864000 history_banks=2 packets=5 candidate_depth_inverted=0 depth_convention=UNVERIFIED jitter_delta=actual_previous_minus_current_viewport_over720 CPU_readback=0 phase=UNVERIFIED\n",(unsigned long long)next->sky->ImageBytes());
  retained=std::move(next);owner=std::make_shared<BbNativeAsync::Owner>();
@@ -149,6 +150,7 @@ std::optional<BbNativeAsync::Frame> NativeAsyncPreSr::RecordedOrigin(const Sched
  return f;
 }
 vk::ImageView NativeAsyncPreSr::RecordAdvanceAndApply(Scheduler& scheduler,uint64_t current_source) {
+ if(BbNativePreSrAcquisition::Enabled())return AdvanceAcquisition(scheduler,current_source);
  if(stopping||rejected||!retained||!chain.Size())return {};
  const auto& origin=chain.Origin();
  if(!chain.CompleteTo(origin.source,current_source,origin.epoch,origin.history))return {};
@@ -223,14 +225,16 @@ vk::ImageView NativeAsyncPreSr::RecordAdvanceAndApply(Scheduler& scheduler,uint6
 
 bool NativeAsyncPreSr::TryRecordSparseInput(Scheduler& scheduler,const NativeAsyncPreSrOriginResources& resources,
  const NativeAsyncPreSrOriginIdentity& id,const std::shared_ptr<NativeAsyncPreSrOriginGpuProof>& proof) {
- if(stopping||rejected||pending_sparse||!retained||!chain.Size()||!proof||proof->native_target_tick||
-    !id.Matches(chain.Origin())||!resources.Valid(id)||!recorded_origin||
-    !recorded_origin->Matches(retained->records[0]->frame,reinterpret_cast<uintptr_t>(&scheduler),scheduler.CurrentTick()))return false;
- auto lease=retained->leases[0];if(!lease||lease->native.peer_read||lease->native.unknown)return false;
+ if(stopping||rejected||pending_sparse||!retained||!proof||proof->native_target_tick||
+    !resources.Valid(id)||!recorded_origin)return false;
+ if(BbNativePreSrAcquisition::Enabled()){
+  if(!acquisition.pending||!id.Matches(SparseOrigin())||!recorded_origin->Matches(SparseOrigin(),reinterpret_cast<uintptr_t>(&scheduler),scheduler.CurrentTick()))return false;
+ }else if(!chain.Size()||!id.Matches(chain.Origin())||!recorded_origin->Matches(retained->records[0]->frame,reinterpret_cast<uintptr_t>(&scheduler),scheduler.CurrentTick()))return false;
+ auto lease=retained->leases[PendingPacket()];if(!lease||lease->native.peer_read||lease->native.unknown)return false;
  // The lease is installed BEFORE any shared writes. An INPUT is not publishable
  // until proof callback reports this native copied/released target actually done.
  lease->native.peer_read=true;pending_sparse=id;sparse_input_proof=proof;
- RecordAsyncPreSrOriginInput(scheduler,resources,id,retained->sky->ConvertedOrigin(),proof);
+ RecordAsyncPreSrOriginInput(scheduler,resources,id,BbNativePreSrAcquisition::Enabled()?retained->sky->Converted(PendingPacket()):retained->sky->ConvertedOrigin(),proof);
  std::printf("NATIVE_ORIGIN_INPUT_RECORDED origin=%llu job=%llu source_copy_tick=%llu source_conversion_tick=%llu input_target_tick=%llu producer=same_native_scheduler_recorded actual_input_GPU_complete=NOT_YET_OBSERVED no_extra_flush=1\n",
   (unsigned long long)id.origin_source,(unsigned long long)id.job,
   (unsigned long long)recorded_origin->copy_tick,(unsigned long long)recorded_origin->conversion_tick,
@@ -248,23 +252,28 @@ NativeAsyncPreSr::SparseReturn NativeAsyncPreSr::TryRecordSparseComplete(Schedul
     !sparse_input_proof->native_GPU_complete.load(std::memory_order_acquire)||complete.input_tick_echo!=sparse_input_proof->native_target_tick||
     id.session!=expected.session||id.resource_set!=expected.resource_set||id.generation!=expected.generation||id.job!=expected.job||
     id.origin_source!=expected.origin_source||id.origin_epoch!=expected.origin_epoch||id.origin_history!=expected.origin_history||id.params_version!=expected.params_version||
-    !resources.Valid(id)||!id.Matches(chain.Origin())||complete.model_reset!=1)throw std::runtime_error("Native sparse exact completion/native input identity mismatch");
+    !resources.Valid(id)||!(BbNativePreSrAcquisition::Enabled()?acquisition.pending&&id.Matches(SparseOrigin()):chain.Size()&&id.Matches(chain.Origin()))||complete.model_reset!=1)throw std::runtime_error("Native sparse exact completion/native input identity mismatch");
  const bool valid=complete.output_valid&&complete.model_valid&&complete.evaluate_calls==1&&complete.evaluate_result==1&&complete.resolve_calls==1;
  const bool skip=complete.expected_skip&&!complete.output_valid&&!complete.model_valid&&!complete.evaluate_calls&&!complete.evaluate_result&&!complete.resolve_calls;
  if(!valid&&!skip)throw std::runtime_error("Native sparse normal model predicate rejected unexpected output");
- const bool current=!stopping&&!rejected&&current_source>0&&chain.CompleteTo(id.origin_source,current_source,id.origin_epoch,id.origin_history);
+ const bool current=!stopping&&!rejected&&current_source>0&&(BbNativePreSrAcquisition::Enabled()?acquisition.PendingToCurrent()&&acquisition.packets[acquisition.current].source==current_source:chain.CompleteTo(id.origin_source,current_source,id.origin_epoch,id.origin_history));
  if(valid&&current&&retained->sky->SparseScratchBusy())return {};
  AcquireAsyncPreSrOriginOutput(scheduler,resources,id);
  SparseReturn result;result.disposition=skip?SparseDisposition::ExpectedSkip:SparseDisposition::ObsoleteDiscard;
- auto hold=retained;const auto lease=hold->leases[0];
- if(valid&&current){result.view=hold->sky->RecordSparseCatchup(scheduler,chain.Size()-1,resources.views[3]);
+ auto hold=retained;const auto lease=hold->leases[PendingPacket()];
+ if(valid&&current){result.view=BbNativePreSrAcquisition::Enabled()?hold->sky->RecordAcquisitionCatchup(scheduler,std::span<const unsigned>(acquisition.pending_slots.data(),acquisition.pending_count),resources.views[3]):hold->sky->RecordSparseCatchup(scheduler,chain.Size()-1,resources.views[3]);
   if(!result.view)throw std::runtime_error("Native sparse catchup reservation failed after output acquire");
   result.disposition=SparseDisposition::Captured;
  }
  ReleaseAsyncPreSrOriginOutput(scheduler,resources,id,final_proof);
  const auto tick=final_proof->native_target_tick;
- for(const auto& used:hold->leases)if(used)used->native.catchup=std::max(used->native.catchup,tick);
- const auto leases=hold->leases;
+ auto leases=hold->leases;
+ if(BbNativePreSrAcquisition::Enabled()){
+  leases.fill({});for(unsigned n=0;n<acquisition.pending_count;++n){const auto slot=acquisition.pending_slots[n];leases[slot]=hold->leases[slot];}
+  if(result.disposition!=SparseDisposition::Captured){leases.fill({});leases[PendingPacket()]=lease;}
+  else {BankUse(scheduler);if(!acquisition.Capture(id.job))throw std::runtime_error("C capture exact span changed during recording");}
+ }
+ for(const auto& used:leases)if(used)used->native.catchup=std::max(used->native.catchup,tick);
  // No Helper serial is compared to tick. Peer bit is renderer-only; owner receives
  // the proof for CONSUMED, then passes a finalized memory event back to renderer.
  scheduler.DeferPriorityOperation([hold,leases,tick]{for(const auto& used:leases)if(used)used->CompleteNative(tick);hold->sky->CompleteSparseNativeUse();});
@@ -276,8 +285,8 @@ bool NativeAsyncPreSr::FinalizeSparseLease(const NativeAsyncPreSrOriginIdentity&
  if(!consumed_published_by_owner||proof!=sparse_final_proof||!pending_sparse||!retained||!proof||!proof->native_target_tick||!proof->native_GPU_complete.load(std::memory_order_acquire))return false;
  const auto& e=*pending_sparse;
  if(id.session!=e.session||id.resource_set!=e.resource_set||id.generation!=e.generation||id.job!=e.job||id.origin_source!=e.origin_source||id.origin_epoch!=e.origin_epoch||id.origin_history!=e.origin_history||id.params_version!=e.params_version)return false;
- const auto lease=retained->leases[0];if(!lease||lease->native.unknown||proof->native_target_tick<lease->native.capture||proof->native_target_tick<lease->native.catchup)return false;
- lease->native.peer_read=false;pending_sparse.reset();sparse_input_proof.reset();sparse_final_proof.reset();return true;
+ const auto lease=retained->leases[PendingPacket()];if(!lease||lease->native.unknown||proof->native_target_tick<lease->native.capture||proof->native_target_tick<lease->native.catchup)return false;
+ lease->native.peer_read=false;pending_sparse.reset();sparse_input_proof.reset();sparse_final_proof.reset();if(BbNativePreSrAcquisition::Enabled())acquisition.FinishPending();return true;
 }
 void NativeAsyncPreSr::DrainUnavailable(Scheduler& s) {
  if(!peer)return;
@@ -289,6 +298,13 @@ void NativeAsyncPreSr::DrainUnavailable(Scheduler& s) {
 }
 void NativeAsyncPreSr::MergeRecorded(Scheduler& scheduler,uint64_t source) {
  if(fixed_input&&actual_fixed_input&&source==actual_source){TrackUse(scheduler);fixed_input->MergeRecorded(scheduler,source);}
+ if(BbNativePreSrAcquisition::Enabled()){
+  if(!retained||acquisition.current>=5||acquisition.packets[acquisition.current].source!=source)return;
+  TrackUse(scheduler);const auto tick=scheduler.CurrentTick();auto lease=retained->leases[acquisition.current];auto hold=retained;
+  lease->native.merge=std::max(lease->native.merge,tick);
+  if(effect_selected)BankUse(scheduler); // conservative bank lifetime through actual selected merge
+  scheduler.DeferPriorityOperation([hold,lease,tick]{lease->CompleteNative(tick);});return;
+ }
  if(!retained||chain.LastSource()!=source)return;
  TrackUse(scheduler);
  const auto tick=scheduler.CurrentTick();auto hold=retained;
@@ -326,6 +342,7 @@ bool NativeAsyncPreSr::TryCaptureOrigin(const Instance& instance,Scheduler& sche
      c.samples!=vk::SampleCountFlagBits::e1||c.mipLevels!=1||c.arrayLayers!=1||!(c.usage&vk::ImageUsageFlagBits::eTransferSrc))return false;
  }
  if(!retained)Create(instance);
+ if(BbNativePreSrAcquisition::Enabled())return CaptureAcquisition(scheduler,source,meta);
  auto decision=chain.Classify(meta);
  if(decision==BbNativeAsync::Chain::Decision::Reject)return false;
  if(decision==BbNativeAsync::Chain::Decision::Full||decision==BbNativeAsync::Chain::Decision::Discontinuity){
@@ -411,7 +428,10 @@ void NativeAsyncPreSr::SrReadRecorded(Scheduler& scheduler,uint64_t source,vk::I
  prior_fixed_input=actual_fixed_input;
  if(!actual_supported)return;
  if(fixed_input&&actual_fixed_input&&image==fixed_input->Image()){TrackUse(scheduler);fixed_input->SrReadRecorded(scheduler,source,image);}
- if(retained&&chain.LastSource()==source){
+ if(BbNativePreSrAcquisition::Enabled()&&retained&&acquisition.current<5&&acquisition.packets[acquisition.current].source==source){
+  TrackUse(scheduler);const auto tick=scheduler.CurrentTick();auto hold=retained;auto lease=hold->leases[acquisition.current];lease->sr_read=std::max(lease->sr_read,tick);
+  scheduler.DeferPriorityOperation([hold,lease,tick]{lease->CompleteNative(tick);});
+ }else if(retained&&chain.LastSource()==source){
   TrackUse(scheduler);const auto tick=scheduler.CurrentTick();const auto leases=retained->leases;auto hold=retained;
   for(auto& lease:leases)if(lease)lease->sr_read=std::max(lease->sr_read,tick);
   scheduler.DeferPriorityOperation([hold,leases,tick]{for(auto& lease:leases)if(lease)lease->CompleteNative(tick);});
@@ -445,6 +465,7 @@ void NativeAsyncPreSr::SrReadRecorded(Scheduler& scheduler,uint64_t source,vk::I
 
 namespace Vulkan {
 std::optional<vk::ImageCreateInfo> NativeAsyncPreSr::ReturnInfo(uint64_t source,vk::Image image)const noexcept{
+ if(BbNativePreSrAcquisition::Enabled()&&retained&&acquisition.current<5&&acquisition.packets[acquisition.current].source==source&&image==returned_image)return retained->returns->Info(acquisition.current);
  if(retained&&chain.Size()&&chain.LastSource()==source&&image==returned_image)return retained->returns->Info(chain.Size()-1);
  return {};
 }
@@ -454,3 +475,92 @@ vk::ImageView NativeAsyncPreSr::RecordFixedInput(const Instance& i,Scheduler& s,
  TrackUse(s);auto view=fixed_input->RecordCopy(s,source,input,ci);actual_fixed_input=true;return view;
 }
 }
+
+namespace Vulkan {
+void NativeAsyncPreSr::BankUse(Scheduler& scheduler){
+ if(!retained||!retained->bank_lease)return;
+ auto hold=retained;auto lease=hold->bank_lease;const auto tick=scheduler.CurrentTick();lease->native.catchup=std::max(lease->native.catchup,tick);
+ TrackUse(scheduler);scheduler.DeferPriorityOperation([hold,lease,tick]{lease->CompleteNative(tick);});
+}
+bool NativeAsyncPreSr::CaptureAcquisition(Scheduler& scheduler,const std::array<vk::Image,3>& source,BbNativeAsync::Frame meta){
+ if(!acquisition.CanAdmit(meta))return false;
+ if(acquisition.pending&&acquisition.pending_continuous&&meta.source-acquisition.packets[acquisition.pending_slots[0]].source>BbNativeAsync::MaxLinks)acquisition.pending_continuous=false;
+ auto chosen=acquisition.Select([&](unsigned i){return !retained->leases[i]||retained->leases[i]->CanReuse();});
+ if(!chosen){acquisition.RejectCurrent();return false;} // no wait, Flush, counter refresh or proof deletion
+ const unsigned slot=*chosen;meta.copy_tick=scheduler.CurrentTick();
+ auto candidate=acquisition;candidate.Admit(slot,meta);const auto next=candidate.packets[slot];
+ auto record=std::make_shared<BbNativeAsync::Node>(next);if(!owner->TryPost(record)){acquisition.RejectCurrent();return false;}
+ auto lease=std::make_shared<BbNativeAsyncPreSr::SourceLease>();lease->native.copy=next.copy_tick;
+ retained->records[slot]=record;retained->leases[slot]=lease;
+ auto cmd=scheduler.CommandBuffer();
+ for(unsigned role=0;role<3;++role){
+  const unsigned target=3*slot+role;
+  const auto aspect=role==1?vk::ImageAspectFlagBits::eDepth:vk::ImageAspectFlagBits::eColor;
+  const vk::ImageMemoryBarrier2 src{.srcStageMask=vk::PipelineStageFlagBits2::eAllCommands,.srcAccessMask=vk::AccessFlagBits2::eMemoryWrite,
+   .dstStageMask=vk::PipelineStageFlagBits2::eTransfer,.dstAccessMask=vk::AccessFlagBits2::eTransferRead,
+   .oldLayout=vk::ImageLayout::eGeneral,.newLayout=vk::ImageLayout::eGeneral,
+   .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+   .image=source[role],.subresourceRange={aspect,0,1,0,1}};
+  const auto dest=vk::Image(retained->images[target]);
+  const vk::ImageMemoryBarrier2 dst{.srcStageMask=vk::PipelineStageFlagBits2::eAllCommands,
+   .srcAccessMask=vk::AccessFlagBits2::eMemoryRead|vk::AccessFlagBits2::eMemoryWrite,
+   .dstStageMask=vk::PipelineStageFlagBits2::eTransfer,.dstAccessMask=vk::AccessFlagBits2::eTransferWrite,
+   .oldLayout=vk::ImageLayout::eUndefined,.newLayout=vk::ImageLayout::eGeneral,
+   .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+   .image=dest,.subresourceRange={aspect,0,1,0,1}};
+  const std::array barriers{src,dst};cmd.pipelineBarrier2({.imageMemoryBarrierCount=2,.pImageMemoryBarriers=barriers.data()});
+  const vk::ImageCopy copy{.srcSubresource={aspect,0,0,1},.dstSubresource={aspect,0,0,1},.extent={1280u,720u,1}};
+  cmd.copyImage(source[role],vk::ImageLayout::eGeneral,dest,vk::ImageLayout::eGeneral,copy);
+  const vk::ImageMemoryBarrier2 ready{.srcStageMask=vk::PipelineStageFlagBits2::eTransfer,.srcAccessMask=vk::AccessFlagBits2::eTransferWrite,
+   .dstStageMask=vk::PipelineStageFlagBits2::eComputeShader|vk::PipelineStageFlagBits2::eTransfer,
+   .dstAccessMask=vk::AccessFlagBits2::eShaderRead|vk::AccessFlagBits2::eTransferRead,
+   .oldLayout=vk::ImageLayout::eGeneral,.newLayout=vk::ImageLayout::eGeneral,
+   .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+   .image=dest,.subresourceRange={aspect,0,1,0,1}};
+  cmd.pipelineBarrier2({.imageMemoryBarrierCount=1,.pImageMemoryBarriers=&ready});
+  auto restore=src;restore.srcStageMask=vk::PipelineStageFlagBits2::eTransfer;restore.srcAccessMask=vk::AccessFlagBits2::eTransferRead;
+  restore.dstStageMask=vk::PipelineStageFlagBits2::eAllCommands;restore.dstAccessMask=vk::AccessFlagBits2::eMemoryRead|vk::AccessFlagBits2::eMemoryWrite;
+  cmd.pipelineBarrier2({.imageMemoryBarrierCount=1,.pImageMemoryBarriers=&restore});
+ }
+
+ acquisition=candidate;last_epoch=next.epoch;++source_count;TrackUse(scheduler);
+ if(!play_first_source)play_first_source=next.source;if(play_last_source&&next.source!=play_last_source+1)++play_source_gaps;play_last_source=next.source;
+ retained->sky->RecordAcquisitionConversion(scheduler,slot,{vk::Image(retained->images[slot*3]),vk::Image(retained->images[slot*3+1]),vk::Image(retained->images[slot*3+2])},next);
+ lease->native.capture=std::max(lease->native.capture,scheduler.CurrentTick());
+ // First InitImages writes the banks. Track even without a selected edit.
+ BankUse(scheduler);
+ scheduler.DeferPriorityOperation([hold=retained,record,lease,notify=owner]{lease->CompleteNative(record->frame.copy_tick);record->gpu_ready.store(true,std::memory_order_release);notify->Signal();});
+ std::printf("NATIVE_PRE_SR_ACQUISITION_SOURCE session=%s current_source=%llu physical_packet=%u copy_tick=%llu active_origin=%llu active_job=%llu pending_origin=%llu pending_span=%u physical_capacity=5 max_links=4 source_edited=0 proof=recorded_not_GPU_complete\n",Session().c_str(),(unsigned long long)next.source,slot,(unsigned long long)next.copy_tick,(unsigned long long)(acquisition.active?acquisition.active_origin.source:0),(unsigned long long)acquisition.active_job,(unsigned long long)(acquisition.pending?acquisition.packets[acquisition.pending_slots[0]].source:0),acquisition.pending_count);
+ return true;
+}
+vk::ImageView NativeAsyncPreSr::AdvanceAcquisition(Scheduler& scheduler,uint64_t source){
+ if(stopping||rejected||!retained||acquisition.current>=5||acquisition.packets[acquisition.current].source!=source)return {};
+ const unsigned slot=acquisition.current;const auto& f=acquisition.packets[slot];vk::ImageView view{};
+ if(acquisition.AdvanceActive()){
+  view=retained->sky->RecordAcquisitionAdvance(scheduler,slot);if(!view)throw std::runtime_error("C exact active bank/source mismatch");
+  acquisition.active_current=source;BankUse(scheduler);
+ }else acquisition.active=false;
+ auto job=peer?peer->TryJob():nullptr;
+ if(peer&&peer->State()==NativeAsyncPreSrOriginOwner::Phase::Complete&&job){
+  auto final=TryRecordSparseComplete(scheduler,job->resources,job->complete,source,job->final);
+  if(final.disposition!=SparseDisposition::Unavailable){TrackUse(scheduler);peer->FinalRecorded(job,final.disposition);
+   if(final.view)view=final.view;
+  }
+ }
+ if(peer&&peer->State()==NativeAsyncPreSrOriginOwner::Phase::Ready&&!pending_sparse&&!acquisition.pending){
+  if(auto next_job=peer->TryReserve(f)){
+   if(!acquisition.StartPending(slot))throw std::runtime_error("C single pending acquisition reservation mismatch");
+   recorded_origin=BbNativeAsync::RecordedOrigin{f.source,f.epoch,f.history,f.params,f.copy_tick,scheduler.CurrentTick(),reinterpret_cast<uintptr_t>(&scheduler)};
+   if(TryRecordSparseInput(scheduler,next_job->resources,next_job->id,next_job->input)){TrackUse(scheduler);peer->InputRecorded(next_job);}
+   else {acquisition.FinishPending();peer->CancelReservation(next_job);}
+  }
+ }
+ if(!view||!acquisition.active||acquisition.active_current!=source)return {};
+ effect_selected=true;effect_job=unsigned(acquisition.active_job);
+ bool replay=false;const auto image=retained->sky->SelectedOutput(slot,view,replay);if(!image)throw std::runtime_error("C current selected physical packet mismatch");
+ returned_image=retained->returns->Record(scheduler,slot,view,retained->sky->RawColorView(slot));
+ auto lease=retained->leases[slot];lease->native.catchup=std::max(lease->native.catchup,scheduler.CurrentTick());
+ auto hold=retained;const auto tick=scheduler.CurrentTick();scheduler.DeferPriorityOperation([hold,lease,tick]{lease->CompleteNative(tick);});
+ return retained->returns->View(slot);
+}
+} // namespace Vulkan
