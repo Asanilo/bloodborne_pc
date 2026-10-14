@@ -3,6 +3,7 @@
 #include "native_pre_sr_spawn_log.h"
 #include "native_origin_play_wire.h"
 #include "native_async_play.h"
+#include "native_origin_atomic_clock.h"
 #include "native_origin_identity_policy.h"
 #include "vk_instance.h"
 #include <algorithm>
@@ -30,7 +31,7 @@ namespace W=NativeOriginPlayWire;using J=W::J;using Clock=std::chrono::steady_cl
 std::string Env(const char*k){const char*p=std::getenv(k);return p?p:"";}
 std::string Read(const std::string&p){std::error_code e;auto n=std::filesystem::file_size(p,e);if(!e&&n>65536)throw std::runtime_error("async control64KiB");std::ifstream f(p,std::ios::binary);return f?std::string(std::istreambuf_iterator<char>(f),{}):std::string{};}
 std::string Proc(const std::string&p){std::ifstream f(p,std::ios::binary);return f?std::string(std::istreambuf_iterator<char>(f),{}):std::string{};}
-void Atomic(const std::string&p,const std::string&t){auto tmp=p+".tmp-"+std::to_string(getpid());int fd=open(tmp.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600);if(fd<0)throw std::runtime_error("async atomic open");size_t n=0;while(n<t.size()){auto w=write(fd,t.data()+n,t.size()-n);if(w<0&&errno==EINTR)continue;if(w<=0){close(fd);unlink(tmp.c_str());throw std::runtime_error("async write");}n+=w;}if(fsync(fd)){close(fd);unlink(tmp.c_str());throw std::runtime_error("async fsync");}close(fd);if(rename(tmp.c_str(),p.c_str())){unlink(tmp.c_str());throw std::runtime_error("async rename");}}
+void Atomic(const std::string&p,const std::string&t){NativeOriginAtomicClock::Publish(p,t);}
 std::string Normalize(std::string p){std::replace(p.begin(),p.end(),'\\','/');if(p.rfind("Z:",0)==0)p.erase(0,2);return p;}
 uint64_t Ticks(pid_t p){auto t=Proc("/proc/"+std::to_string(p)+"/stat");auto c=t.rfind(')');if(c==std::string::npos)return 0;std::istringstream in(t.substr(c+2));std::string v;for(unsigned i=0;i<=19;i++){if(!(in>>v))return 0;if(i==0&&(v=="Z"||v=="X"||v=="x"))return 0;if(i==19){try{return std::stoull(v);}catch(...){return 0;}}}return 0;}
 pid_t Parent(pid_t p){std::istringstream in(Proc("/proc/"+std::to_string(p)+"/status"));std::string l;while(std::getline(in,l))if(l.rfind("PPid:",0)==0){try{return std::stol(l.substr(5));}catch(...){return 0;}}return 0;}

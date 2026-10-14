@@ -47,3 +47,21 @@ noautomatic全图 readback/dump/validator. Old explicit dumps and旧short modes
 unchanged. Retain light same-sourceFrame/merge/Present and jobhandoff clocks;
 legacy verbose per-copy/jitter/per-link ready lines suppressed only playmode.
 BUILD_ONLY/CPU do not establish continuous runtime/FPS/quality/phase acceptance.
+
+## Isolated background Atomic slow-publication diagnostic
+
+This timing candidate is separate from the unchanged fdd playable entry. Only
+NativeOriginOwner background Atomic publication is timed with native steady clock:
+open, write (accumulated across partial/EINTR writes), fsync, close, rename. A single
+NATIVE_ORIGIN_ATOMIC_SLOW line is printed only when total wall time exceeds 10ms.
+The basename, nanosecond stage/other durations, success and errno are observations;
+wall intervals include descheduling and do not measure CPU execution or GPU work.
+Total is taken after normal completion or original failure cleanup, before logging.
+Cleanup close is included in close_ns; unlink/report setup falls in other_ns. JSON construction before Atomic is outside
+the measured scope.
+An EINTR error can remain in write_errno after an eventual successful publication.
+An original ignored close error is reported but does not change success semantics.
+No GPU-complete proof is inferred. No operation order, durability, payload, phase,
+protocol, Helper, resource use, wait, age, cap or renderer code is changed. Hot
+publications below the threshold emit nothing; runtime latency/cause and benefit
+are NOT_RUN/UNMEASURED until Root's separate bounded sampling approval.

@@ -3,7 +3,7 @@
 set -euo pipefail
 WT=$(cd -- "$(dirname -- "$0")/../.." && pwd -P)
 R=/home/arinp/Code/nrbridge-design/game-poc-20261011
-RUN="$R/bbport/runs/native-async-play-build-$(date -u +%Y%m%dT%H%M%SZ)"
+RUN="$R/bbport/runs/native-async-atomic-clock-build-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -m 700 -p "$RUN/source-snapshot"
 mapfile -t INPUTS < <(python3 - "$R/bbport/runs/p0-build-20261012T101054Z/source-sha256.txt" <<'PY'
 import pathlib,sys
@@ -19,6 +19,7 @@ INPUTS+=(gpu/shadps4/video_core/renderer_vulkan/native_edit_diagnostic_policy.h 
 INPUTS+=(gpu/shadps4/video_core/renderer_vulkan/native_async_scene_first.h tools/nr_probe/test_native_async_scene_first_cpu.cpp)
 INPUTS+=(gpu/shadps4/video_core/renderer_vulkan/native_pre_sr_spawn_log.h tools/nr_probe/test_native_pre_sr_spawn_log_cpu.cpp)
 INPUTS+=(gpu/shadps4/video_core/renderer_vulkan/native_async_play.h gpu/shadps4/video_core/renderer_vulkan/native_origin_play_wire.h gpu/shadps4/video_core/renderer_vulkan/native_origin_play_spec.h tools/nr_probe/run_game_native_async_play.sh tools/nr_probe/build_native_async_play.sh tools/nr_probe/test_native_async_play_cpu.cpp docs/NATIVE-ASYNC-CONTINUOUS-PLAY.md)
+INPUTS+=(gpu/shadps4/video_core/renderer_vulkan/native_origin_atomic_clock.h tools/nr_probe/test_native_origin_atomic_clock_cpu.cpp)
 while IFS= read -r -d '' f;do [[ ! -f "$WT/$f" ]]||INPUTS+=("$f");done < <(git -C "$WT" diff --name-only -z HEAD)
 mapfile -t INPUTS < <(printf '%s\n' "${INPUTS[@]}"|sort -u)
 manifest(){ : > "$1";for f in "${INPUTS[@]}";do sha256sum "$WT/$f" >> "$1";done;}
@@ -60,6 +61,11 @@ if [[ $cpu -eq 0 ]];then
  cpu=$?
  if [[ $cpu -eq 0 ]];then "$RUN/test-native-async-play" > "$RUN/play-cpu-tests.json" 2>&1;cpu=$?;fi
 fi
+if [[ $cpu -eq 0 ]];then
+ c++ -std=c++20 -Wall -Wextra -Werror -I"$WT/gpu/shadps4" "$WT/tools/nr_probe/test_native_origin_atomic_clock_cpu.cpp" -o "$RUN/test-native-origin-atomic-clock" > "$RUN/atomic-clock-cpu-build.log" 2>&1
+ cpu=$?
+ if [[ $cpu -eq 0 ]];then "$RUN/test-native-origin-atomic-clock" > "$RUN/atomic-clock-cpu-tests.json" 2>&1;cpu=$?;fi
+fi
 rc=$cpu
 if [[ $rc -eq 0 ]];then bash "$WT/tools/nr_probe/build_c0.sh" > "$RUN/build.log" 2>&1;rc=$?;fi
 set -e
@@ -70,7 +76,7 @@ if [[ $rc -eq 0 ]];then sha256sum "$WT/out/bb-probe" "$WT/out/gpu/libbbgpu.so" "
 python3 - "$RUN" "$WT" "$rc" "$cpu" <<'PY'
 import json,pathlib,sys
 r,wt,rc,cpu=pathlib.Path(sys.argv[1]),sys.argv[2],int(sys.argv[3]),int(sys.argv[4])
-d={'status':'PASS' if rc==0 else 'FAIL','scope':'NATIVE_ASYNC_CONTINUOUS_PLAY_BUILD_ONLY','exit_code':rc,'CPU_exit':cpu,'worktree':wt,'GPU':'NOT_RUN','NR_transport':'SPARSE_ADAPTER_RUNTIME_NOT_RUN','NR_edit_selection':'LOCAL_NOOP_SKY_RUNTIME_NOT_RUN','source_manifest':str(r/'source-sha256.txt'),'artifacts':str(r/'artifact-sha256.txt') if rc==0 else None}
+d={'status':'PASS' if rc==0 else 'FAIL','scope':'NATIVE_ASYNC_BACKGROUND_ATOMIC_CLOCK_BUILD_ONLY','exit_code':rc,'CPU_exit':cpu,'worktree':wt,'GPU':'NOT_RUN','NR_transport':'SPARSE_ADAPTER_RUNTIME_NOT_RUN','NR_edit_selection':'LOCAL_NOOP_SKY_RUNTIME_NOT_RUN','source_manifest':str(r/'source-sha256.txt'),'artifacts':str(r/'artifact-sha256.txt') if rc==0 else None}
 (r/'build-result.json').write_text(json.dumps(d,indent=2)+'\n');print(json.dumps(d))
 PY
 exit "$rc"
